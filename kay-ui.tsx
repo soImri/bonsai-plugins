@@ -6,7 +6,8 @@
  * the chat. Single file on purpose: Bonsai bundles a plugin's UI entry on its
  * own, without relative imports.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 import { Button, Pill } from "@bonsai/plugin-ui-sdk/ui";
 import { useKayActions } from "@bonsai/frontend-sdk";
@@ -81,38 +82,51 @@ const ProjectGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill=
 const LabelGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 7.2V2.5h4.7L12 7.8 7.3 12.5z" strokeLinejoin="round" /><circle cx="5" cy="5.5" r="1" fill="currentColor" stroke="none" /></svg>;
 const TeamChip = ({ k }: { k: string }) => <Pill size="sm" surface="glass" lead={<span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: v("success") }} />}>{k}</Pill>;
 
-/* A pill that opens a list. Plain React: the plugin UI SDK exposes Pill but no menu. */
+/* A pill that opens a list. Plain React: the plugin UI SDK exposes Pill but no menu.
+   The list is portaled to <body> so a card's overflow or the transcript's scroll clip never cuts it. */
 function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi }: {
   items: T[]; value: T | T[] | undefined; onPick: (t: T) => void; label: string;
   lead: (t: T | undefined) => ReactNode; keyOf: (t: T) => string; labelOf: (t: T) => string; emphasis?: boolean; multi?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const trigger = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open || !trigger.current) return;
+    const r = trigger.current.getBoundingClientRect();
+    const h = Math.min(items.length, 8) * 34 + 10;
+    const below = r.bottom + 6 + h <= window.innerHeight;
+    setPos({ top: below ? r.bottom + 6 : Math.max(8, r.top - 6 - h), left: Math.min(r.left, window.innerWidth - 200) });
+  }, [open, items.length]);
   useEffect(() => {
     if (!open) return;
-    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
+    const down = (e: MouseEvent) => { const t = e.target as Node; if (!trigger.current?.contains(t) && !menu.current?.contains(t)) setOpen(false); };
+    const close = () => setOpen(false);
+    document.addEventListener("mousedown", down);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => { document.removeEventListener("mousedown", down); window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
   }, [open]);
   const selected = Array.isArray(value) ? value : value === undefined ? [] : [value];
   const text = selected.length ? selected.map(labelOf).join(", ") : label;
   const isSel = (t: T) => selected.some(s => keyOf(s) === keyOf(t));
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div ref={trigger} style={{ display: "inline-flex" }}>
       <Pill tone={emphasis ? "emphasis" : "neutral"} surface={emphasis ? "bare" : "glass"} caret lead={lead(Array.isArray(value) ? undefined : value)} onClick={() => setOpen(o => !o)} aria-expanded={open}>{text}</Pill>
-      {open ? (
-        <div role="listbox" style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 50, minWidth: 180, padding: 4, borderRadius: 8, border: `1px solid ${v("border")}`, background: v("bg-floating"), boxShadow: "0 8px 24px rgba(0,0,0,.12)" }}>
+      {open && pos ? createPortal(
+        <div ref={menu} role="listbox" style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 1000, minWidth: 180, maxHeight: 290, overflowY: "auto", padding: 4, borderRadius: 8, border: `1px solid ${v("border")}`, background: v("bg-floating"), boxShadow: "0 8px 24px rgba(0,0,0,.14)", color: v("text-primary"), fontSize: 13 }}>
+          {items.length === 0 ? <div style={{ padding: "6px 8px", color: v("text-secondary") }}>No options</div> : null}
           {items.map(t => (
             <button key={keyOf(t)} type="button" role="option" aria-selected={isSel(t)} onClick={() => { onPick(t); if (!multi) setOpen(false); }}
-              style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "6px 8px", border: 0, borderRadius: 6, background: "transparent", color: v("text-primary"), font: "inherit", fontSize: 13, textAlign: "left", cursor: "pointer" }}
+              style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "6px 8px", border: 0, borderRadius: 6, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer" }}
               onMouseEnter={e => (e.currentTarget.style.background = v("interactive-hover"))} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
               <span style={{ display: "inline-flex", width: 14, justifyContent: "center", color: v("text-secondary") }}>{lead(t)}</span>
               <span style={{ flex: 1 }}>{labelOf(t)}</span>
               {isSel(t) ? <span style={{ color: v("accent") }}>✓</span> : null}
             </button>
           ))}
-        </div>
-      ) : null}
+        </div>, document.body) : null}
     </div>
   );
 }
@@ -148,7 +162,13 @@ function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const [project, setProject] = useState<string | undefined>(initial.project);
   const [labels, setLabels] = useState<string[]>(initial.labels);
   const [saving, setSaving] = useState(false);
-  if (!issue) return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Loading issue…" : "No issue data."}</div>;
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    // Args can arrive in pieces while the call streams; once they settle, re-seed unless the person already edited.
+    if (dirtyRef.current) return;
+    setSaved(initial); setState(initial.state); setPriority(initial.priority); setAssignee(initial.assignee); setProject(initial.project); setLabels(initial.labels);
+  }, [initial]);
+  if (!issue || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Loading issue…" : "No issue data."}</div>;
   const team = issue.identifier.split("-")[0];
   const members = issue.options?.members ?? (assignee ? [assignee] : []);
   const projects = issue.options?.projects ?? (project ? [project] : []);
@@ -160,6 +180,7 @@ function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   if (assignee !== saved.assignee) changes.push(`assignee → ${assignee ?? "none"}`);
   if (project !== saved.project) changes.push(`project → ${project ?? "none"}`);
   if (labels.join("|") !== saved.labels.join("|")) changes.push(`labels → ${labels.length ? labels.join(", ") : "none"}`);
+  dirtyRef.current = changes.length > 0;
 
   function discard() { setState(saved.state); setPriority(saved.priority); setAssignee(saved.assignee); setProject(saved.project); setLabels(saved.labels); }
   async function save() {
@@ -213,7 +234,14 @@ function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const [project, setProject] = useState<string | undefined>(draft?.project);
   const [labels, setLabels] = useState<string[]>(draft?.labels ?? []);
   const [sent, setSent] = useState(false);
-  if (!draft) return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Preparing draft…" : "No draft data."}</div>;
+  const touched = useRef(false);
+  useEffect(() => {
+    if (touched.current || !draft) return;
+    setTitle(draft.title ?? ""); setDesc(draft.description ?? "");
+    setState(states.find(s => s.name === draft.state) ?? states[1]); setPriority(draft.priority ?? 0);
+    setAssignee(draft.assignee); setProject(draft.project); setLabels(draft.labels ?? []);
+  }, [draft]);
+  if (!draft || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Preparing draft…" : "No draft data."}</div>;
   const members = draft.options?.members ?? (assignee ? [assignee] : []);
   const projects = draft.options?.projects ?? (project ? [project] : []);
   const labelOptions = draft.options?.labels ?? labels;
@@ -230,14 +258,14 @@ function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
     <section style={card}>
       <div style={pad}>
         <TeamChip k={draft.team} />
-        <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => setTitle(e.target.value)} placeholder="Issue title" aria-label="Issue title" disabled={locked} />
-        <textarea style={{ ...bare, lineHeight: "22px" }} rows={3} value={desc} onChange={e => setDesc(e.target.value)} placeholder="Add description…" aria-label="Add description" disabled={locked} />
+        <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => { touched.current = true; setTitle(e.target.value); }} placeholder="Issue title" aria-label="Issue title" disabled={locked} />
+        <textarea style={{ ...bare, lineHeight: "22px" }} rows={3} value={desc} onChange={e => { touched.current = true; setDesc(e.target.value); }} placeholder="Add description…" aria-label="Add description" disabled={locked} />
         <div style={{ ...row, pointerEvents: locked ? "none" : "auto", opacity: locked ? 0.7 : 1 }}>
-          <Picker items={states} value={state} onPick={setState} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
-          <Picker items={[0, 1, 2, 3, 4]} value={priority} onPick={setPriority} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
-          <Picker items={members} value={assignee} onPick={setAssignee} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} />
-          <Picker items={projects} value={project} onPick={setProject} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} />
-          <Picker items={labelOptions} value={labels} multi onPick={l => setLabels(ls => ls.includes(l) ? ls.filter(x => x !== l) : [...ls, l])} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} />
+          <Picker items={states} value={state} onPick={s => { touched.current = true; setState(s); }} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
+          <Picker items={[0, 1, 2, 3, 4]} value={priority} onPick={p => { touched.current = true; setPriority(p); }} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
+          <Picker items={members} value={assignee} onPick={m => { touched.current = true; setAssignee(m); }} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} />
+          <Picker items={projects} value={project} onPick={p => { touched.current = true; setProject(p); }} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} />
+          <Picker items={labelOptions} value={labels} multi onPick={l => { touched.current = true; setLabels(ls => ls.includes(l) ? ls.filter(x => x !== l) : [...ls, l]); }} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} />
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${v("border")}`, padding: "10px 16px" }}>
