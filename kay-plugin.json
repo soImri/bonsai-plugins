@@ -1,0 +1,29 @@
+{
+  "protocol": "kay.plugin.v1",
+  "id": "com.imrisofer.connector-cards",
+  "displayName": "Connector cards",
+  "description": "Connector-owned UI in the chat. Linear first: an issue card and a create-issue card in Linear's own shape, filled by the agent, edited by the person, created through Bonsai's Linear connector.",
+  "version": "0.1.0",
+  "namespace": "connectorcards",
+  "compatibility": { "sdk": "^0.13.0" },
+  "targets": {
+    "kay": {
+      "agent": {
+        "entrypoint": { "module": "./kay-agent.ts" },
+        "contributes": {
+          "skills": [
+            {
+              "localId": "linear-cards",
+              "displayName": "Linear cards",
+              "description": "Show a Linear issue, or draft and create one, through Linear-shaped cards in the chat instead of prose. Use for 'show NEAT-9', 'what's the status of', 'create an issue for', 'file this in Linear'. Reads go through linear://, the create goes through the Linear MCP after the person presses Create issue on the card.",
+              "path": "./skills/linear-cards/SKILL.md"
+            }
+          ]
+        }
+      },
+      "ui": {
+        "entrypoint": { "module": "./kay-ui.tsx" }
+      }
+    }
+  }
+}
