@@ -10,15 +10,15 @@ Two tools draw Linear's own UI in the chat. You supply the fields; the card draw
 ## Show an issue
 
 1. `read linear://issues/<identifier>` (or search first).
-2. Call `linear_issue_card` with the fields you read: identifier, title, description, url, state `{name, type}`, priority (0–4), assignee, project, labels, createdAt, completedAt.
+2. Call `linearcards_issue` with the fields you read: identifier, title, description, url, state `{name, type}`, priority (0–4), assignee, project, labels, createdAt, completedAt.
 3. Say nothing else about the issue. The card is the answer.
 
 ## Create an issue
 
 1. Read the team's pick lists once: states, projects, labels, members (`linear://` team or issue reads expose them; the Linear MCP `list_issue_statuses`, `list_projects`, `list_issue_labels`, `list_users` also work).
-2. Call `linear_new_issue_card` with your proposed title, description, state, priority, assignee, project, labels, and `options` holding those lists.
+2. Call `linearcards_newissue` with your proposed title, description, state, priority, assignee, project, labels, and `options` holding those lists.
 3. Stop. Do not create anything yet.
-4. When a message arrives that starts with `Create Linear issue`, create exactly what it specifies through the Linear MCP (`create_issue`), then show the result with `linear_issue_card`.
+4. When a message arrives that starts with `Create Linear issue`, create exactly what it specifies through the Linear MCP (`create_issue`), then show the result with `linearcards_issue`.
 
 ## Rules
 

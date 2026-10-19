@@ -1,8 +1,8 @@
 /**
  * Connector cards — UI side.
  *
- * Registers two inline tool renderers so `linear_issue_card` and
- * `linear_new_issue_card` draw as Linear's issue view and create dialog inside
+ * Registers two inline tool renderers so `linearcards_issue` and
+ * `linearcards_newissue` draw as Linear's issue view and create dialog inside
  * the chat. Single file on purpose: Bonsai bundles a plugin's UI entry on its
  * own, without relative imports.
  */
@@ -203,7 +203,7 @@ function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
 
 export default function activate(api) {
   const presentation = { venue: "inline", grouping: "standalone", disclosure: "always-open" } as const;
-  const a = api.slots.registerToolRenderer("linear_issue_card", IssueCard, presentation);
-  const b = api.slots.registerToolRenderer("linear_new_issue_card", NewIssueCard, presentation);
+  const a = api.slots.registerToolRenderer("linearcards_issue", IssueCard, presentation);
+  const b = api.slots.registerToolRenderer("linearcards_newissue", NewIssueCard, presentation);
   return { dispose() { a.dispose(); b.dispose(); } };
 }

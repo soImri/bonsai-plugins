@@ -33,7 +33,7 @@ const text = (t: string) => ({ content: [{ type: "text", text: t }], details: un
 
 export const activate = (api) => {
   api.registerTool({
-    name: "linear_issue_card",
+    name: "linearcards_issue",
     label: "Linear issue card",
     description:
       "Show one Linear issue in the chat as a card in Linear's own issue layout (identifier, title, description, status, priority, assignee, project, labels). Read the issue from linear:// first, then pass its fields here. Use instead of describing an issue in prose.",
@@ -44,7 +44,7 @@ export const activate = (api) => {
   });
 
   api.registerTool({
-    name: "linear_new_issue_card",
+    name: "linearcards_newissue",
     label: "Linear new issue",
     description:
       "Draft a new Linear issue in the chat as Linear's create dialog, prefilled with your proposal. The person edits title, description, status, priority, assignee, project and labels on the card and presses Create issue; the card then sends the final values back as a message. Call this instead of creating the issue yourself. Pass the team's real option lists (read from linear://) so the pickers are accurate.",
@@ -74,7 +74,7 @@ export const activate = (api) => {
     },
     async execute(_id, params) {
       return text(
-        `Draft of "${params.title}" shown as Linear's create dialog. Stop here. The person edits it on the card and presses Create issue; the card then sends a message with the final values. Create the issue only when that message arrives, then show the result with linear_issue_card.`,
+        `Draft of "${params.title}" shown as Linear's create dialog. Stop here. The person edits it on the card and presses Create issue; the card then sends a message with the final values. Create the issue only when that message arrives, then show the result with linearcards_issue.`,
       );
     },
   });
