@@ -80,8 +80,8 @@ export const activate = (api) => {
                 instructions: "Pick the Linear view that answers the task best. Judge the task wording and how many issues there are.",
                 criteria: {
                   issue: "One issue in full: title, description, properties. The task is about a single issue.",
-                  list: "Several issues as compact rows, to scan or triage.",
-                  board: "Several issues grouped by status, to see where work stands or what is blocked.",
+                  list: "Several issues as compact rows. The task asks to see, scan, or triage issues and does not ask about progress or status.",
+                  board: "Several issues grouped by status. The task asks where things stand, how work is progressing, what is done or blocked, or for an overview.",
                 },
               },
               description: { type: "bool", instructions: "Should the view show each issue's description?", criteria: { true: "The task needs the body text to judge the issue.", false: "Titles and properties are enough." } },
