@@ -5,11 +5,15 @@
   "description": "Connector-owned UI in the chat. Linear first: an issue card and a create-issue card in Linear's own shape, filled by the agent, edited by the person, created through Bonsai's Linear connector.",
   "version": "0.1.0",
   "namespace": "connectorcards",
-  "compatibility": { "sdk": "^0.13.0" },
+  "compatibility": {
+    "sdk": "^0.13.0"
+  },
   "targets": {
     "kay": {
       "agent": {
-        "entrypoint": { "module": "./kay-agent.ts" },
+        "entrypoint": {
+          "module": "./kay-agent.ts"
+        },
         "contributes": {
           "skills": [
             {
@@ -18,11 +22,27 @@
               "description": "Show a Linear issue, or draft and create one, through Linear-shaped cards in the chat instead of prose. Use for 'show NEAT-9', 'what's the status of', 'create an issue for', 'file this in Linear'. Reads go through linear://, the create goes through the Linear MCP after the person presses Create issue on the card.",
               "path": "./skills/linear-cards/SKILL.md"
             }
+          ],
+          "tools": [
+            {
+              "localId": "issue-card",
+              "toolName": "linear_issue_card",
+              "displayName": "Linear issue card",
+              "description": "Show one Linear issue in the chat as a card in Linear's own issue layout. Read the issue from linear:// first, then pass its fields."
+            },
+            {
+              "localId": "new-issue-card",
+              "toolName": "linear_new_issue_card",
+              "displayName": "Linear new issue",
+              "description": "Draft a new Linear issue in the chat as Linear's create dialog, prefilled. The person edits and presses Create issue; the card sends the final values back as a message."
+            }
           ]
         }
       },
       "ui": {
-        "entrypoint": { "module": "./kay-ui.tsx" }
+        "entrypoint": {
+          "module": "./kay-ui.tsx"
+        }
       }
     }
   }
