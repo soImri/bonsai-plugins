@@ -11,7 +11,12 @@ Two tools draw Linear's own UI in the chat. You supply the fields; the card draw
 
 1. `read linear://issues/<identifier>` (or search first).
 2. Call `linearcards_issue` with the fields you read: identifier, title, description, url, state `{name, type}`, priority (0–4), assignee, project, labels, createdAt, completedAt.
-3. Say nothing else about the issue. The card is the answer.
+3. Pass `options` (the team's states, projects, labels, members) so the card's pills can change values. Read them once per session and reuse.
+4. Reply with at most one short line (the issue link). Do not restate any field; the card is the answer.
+
+## Change an issue from its card
+
+The person changes a pill on the card. A message arrives like `Update NEAT-10: status → In Progress` (fields: status, priority, assignee, project, labels; labels is a full comma list or `none`). Apply exactly that change through the Linear MCP (`update_issue`), then confirm in one short line. Do not redraw the card.
 
 ## Create an issue
 

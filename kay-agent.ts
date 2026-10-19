@@ -27,6 +27,16 @@ const issueFields = {
   labels: { type: "array", items: { type: "string" } },
   createdAt: { type: "string", description: "ISO date. Optional." },
   completedAt: { type: "string", description: "ISO date. Optional." },
+  options: {
+    type: "object",
+    description: "The team's pick lists so the card's pills can change values. Optional but recommended.",
+    properties: {
+      states: { type: "array", items: stateSchema },
+      projects: { type: "array", items: { type: "string" } },
+      labels: { type: "array", items: { type: "string" } },
+      members: { type: "array", items: { type: "string" } },
+    },
+  },
 };
 
 const text = (t: string) => ({ content: [{ type: "text", text: t }], details: undefined });
@@ -36,7 +46,7 @@ export const activate = (api) => {
     name: "linearcards_issue",
     label: "Linear issue card",
     description:
-      "Show one Linear issue in the chat as a card in Linear's own issue layout (identifier, title, description, status, priority, assignee, project, labels). Read the issue from linear:// first, then pass its fields here. Use instead of describing an issue in prose.",
+      "Show one Linear issue in the chat as a card in Linear's own issue layout (identifier, title, description, status, priority, assignee, project, labels). Read the issue from linear:// first, then pass its fields here, plus the team's pick lists in options so the pills are live. Use instead of describing an issue in prose.",
     parameters: { type: "object", properties: issueFields, required: ["identifier", "title", "state", "priority"] },
     async execute(_id, params) {
       return text(`Showing ${params.identifier} as a Linear issue card.`);

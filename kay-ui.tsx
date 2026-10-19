@@ -24,6 +24,7 @@ type Issue = {
   labels?: string[];
   createdAt?: string;
   completedAt?: string;
+  options?: { states?: State[]; projects?: string[]; labels?: string[]; members?: string[] };
 };
 type Draft = {
   team: string;
@@ -128,11 +129,29 @@ function Description({ md }: { md: string }) {
   );
 }
 
-/* ---------- Issue view ---------- */
-function IssueCard({ phase, rawArgs }: RendererProps) {
+/* ---------- Issue view (live pills, like Linear's) ---------- */
+function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const issue = useMemo(() => parse<Issue>(rawArgs), [rawArgs]);
+  const actions = useKayActions(sessionId);
+  const states = issue?.options?.states?.length ? issue.options.states : DEFAULT_STATES;
+  const [state, setState] = useState<State | undefined>(() => issue ? (states.find(s => s.name === issue.state.name) ?? issue.state) : undefined);
+  const [priority, setPriority] = useState(issue?.priority ?? 0);
+  const [assignee, setAssignee] = useState<string | undefined>(issue?.assignee);
+  const [project, setProject] = useState<string | undefined>(issue?.project);
+  const [labels, setLabels] = useState<string[]>(issue?.labels ?? []);
+  const [pending, setPending] = useState<string | null>(null);
   if (!issue) return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Loading issue…" : "No issue data."}</div>;
   const team = issue.identifier.split("-")[0];
+  const members = issue.options?.members ?? (assignee ? [assignee] : []);
+  const projects = issue.options?.projects ?? (project ? [project] : []);
+  const labelOptions = issue.options?.labels ?? labels;
+
+  async function update(field: string, value: string) {
+    setPending(`${field} → ${value}`);
+    await actions.sendMessage(`Update ${issue!.identifier}: ${field} → ${value}`);
+    setPending(null);
+  }
+
   return (
     <section style={{ ...card, ...pad }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -142,13 +161,15 @@ function IssueCard({ phase, rawArgs }: RendererProps) {
       <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
       {issue.description ? <Description md={issue.description} /> : null}
       <div style={{ ...row, paddingTop: 2 }}>
-        <Pill tone="emphasis" lead={<StatusGlyph type={issue.state.type} />}>{issue.state.name}</Pill>
-        <Pill surface="glass" lead={<PriorityGlyph p={issue.priority} />}>{PRIORITIES[issue.priority] ?? "No priority"}</Pill>
-        {issue.assignee ? <Pill surface="glass" lead={<UserGlyph />}>{issue.assignee}</Pill> : null}
-        {issue.project ? <Pill surface="glass" lead={<ProjectGlyph />}>{issue.project}</Pill> : null}
-        {(issue.labels ?? []).map(l => <Pill key={l} surface="glass" lead={<LabelGlyph />}>{l}</Pill>)}
+        <Picker items={states} value={state} onPick={s => { setState(s); void update("status", s.name); }} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
+        <Picker items={[0, 1, 2, 3, 4]} value={priority} onPick={p => { setPriority(p); void update("priority", PRIORITIES[p]); }} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
+        <Picker items={members} value={assignee} onPick={m => { setAssignee(m); void update("assignee", m); }} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} />
+        <Picker items={projects} value={project} onPick={p => { setProject(p); void update("project", p); }} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} />
+        <Picker items={labelOptions} value={labels} multi onPick={l => { const next = labels.includes(l) ? labels.filter(x => x !== l) : [...labels, l]; setLabels(next); void update("labels", next.length ? next.join(", ") : "none"); }} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} />
       </div>
-      {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {day(issue.createdAt)}{issue.completedAt ? ` · Done ${day(issue.completedAt)}` : ""}</div> : null}
+      <div style={{ ...muted, fontSize: 12 }}>
+        {pending ? `Updating ${pending}…` : issue.createdAt ? `Created ${day(issue.createdAt)}${issue.completedAt ? ` · Done ${day(issue.completedAt)}` : ""}` : ""}
+      </div>
     </section>
   );
 }
