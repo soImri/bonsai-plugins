@@ -129,47 +129,73 @@ function Description({ md }: { md: string }) {
   );
 }
 
-/* ---------- Issue view (live pills, like Linear's) ---------- */
+/* ---------- Issue view (live pills, batched save) ---------- */
 function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const issue = useMemo(() => parse<Issue>(rawArgs), [rawArgs]);
   const actions = useKayActions(sessionId);
   const states = issue?.options?.states?.length ? issue.options.states : DEFAULT_STATES;
-  const [state, setState] = useState<State | undefined>(() => issue ? (states.find(s => s.name === issue.state.name) ?? issue.state) : undefined);
-  const [priority, setPriority] = useState(issue?.priority ?? 0);
-  const [assignee, setAssignee] = useState<string | undefined>(issue?.assignee);
-  const [project, setProject] = useState<string | undefined>(issue?.project);
-  const [labels, setLabels] = useState<string[]>(issue?.labels ?? []);
-  const [pending, setPending] = useState<string | null>(null);
+  const initial = useMemo(() => ({
+    state: issue ? (states.find(s => s.name === issue.state.name) ?? issue.state) : undefined,
+    priority: issue?.priority ?? 0,
+    assignee: issue?.assignee,
+    project: issue?.project,
+    labels: issue?.labels ?? [],
+  }), [issue]);
+  const [saved, setSaved] = useState(initial);
+  const [state, setState] = useState<State | undefined>(initial.state);
+  const [priority, setPriority] = useState(initial.priority);
+  const [assignee, setAssignee] = useState<string | undefined>(initial.assignee);
+  const [project, setProject] = useState<string | undefined>(initial.project);
+  const [labels, setLabels] = useState<string[]>(initial.labels);
+  const [saving, setSaving] = useState(false);
   if (!issue) return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Loading issue…" : "No issue data."}</div>;
   const team = issue.identifier.split("-")[0];
   const members = issue.options?.members ?? (assignee ? [assignee] : []);
   const projects = issue.options?.projects ?? (project ? [project] : []);
   const labelOptions = issue.options?.labels ?? labels;
 
-  async function update(field: string, value: string) {
-    setPending(`${field} → ${value}`);
-    await actions.sendMessage(`Update ${issue!.identifier}: ${field} → ${value}`);
-    setPending(null);
+  const changes: string[] = [];
+  if (state?.name !== saved.state?.name) changes.push(`status → ${state?.name}`);
+  if (priority !== saved.priority) changes.push(`priority → ${PRIORITIES[priority]}`);
+  if (assignee !== saved.assignee) changes.push(`assignee → ${assignee ?? "none"}`);
+  if (project !== saved.project) changes.push(`project → ${project ?? "none"}`);
+  if (labels.join("|") !== saved.labels.join("|")) changes.push(`labels → ${labels.length ? labels.join(", ") : "none"}`);
+
+  function discard() { setState(saved.state); setPriority(saved.priority); setAssignee(saved.assignee); setProject(saved.project); setLabels(saved.labels); }
+  async function save() {
+    setSaving(true);
+    const next = { state, priority, assignee, project, labels };
+    await actions.sendMessage(`Update ${issue!.identifier}: ${changes.join("; ")}`);
+    setSaved(next); setSaving(false);
   }
 
   return (
-    <section style={{ ...card, ...pad }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ ...row, fontSize: 12, ...muted }}><TeamChip k={team} /><span>›</span><span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{issue.identifier}</span></div>
-        {issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" aria-label="Open in Linear" style={{ ...muted, display: "inline-flex" }}><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v7A1.5 1.5 0 0 0 3.5 13h7a1.5 1.5 0 0 0 1.5-1.5V9M9 2h4v4M13 2L7 8" /></svg></a> : null}
+    <section style={card}>
+      <div style={pad}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ ...row, fontSize: 12, ...muted }}><TeamChip k={team} /><span>›</span><span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{issue.identifier}</span></div>
+          {issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" aria-label="Open in Linear" style={{ ...muted, display: "inline-flex" }}><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v7A1.5 1.5 0 0 0 3.5 13h7a1.5 1.5 0 0 0 1.5-1.5V9M9 2h4v4M13 2L7 8" /></svg></a> : null}
+        </div>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
+        {issue.description ? <Description md={issue.description} /> : null}
+        <div style={{ ...row, paddingTop: 2, pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}>
+          <Picker items={states} value={state} onPick={setState} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
+          <Picker items={[0, 1, 2, 3, 4]} value={priority} onPick={setPriority} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
+          <Picker items={members} value={assignee} onPick={setAssignee} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} />
+          <Picker items={projects} value={project} onPick={setProject} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} />
+          <Picker items={labelOptions} value={labels} multi onPick={l => setLabels(ls => ls.includes(l) ? ls.filter(x => x !== l) : [...ls, l])} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} />
+        </div>
+        {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {day(issue.createdAt)}{issue.completedAt ? ` · Done ${day(issue.completedAt)}` : ""}</div> : null}
       </div>
-      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
-      {issue.description ? <Description md={issue.description} /> : null}
-      <div style={{ ...row, paddingTop: 2 }}>
-        <Picker items={states} value={state} onPick={s => { setState(s); void update("status", s.name); }} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
-        <Picker items={[0, 1, 2, 3, 4]} value={priority} onPick={p => { setPriority(p); void update("priority", PRIORITIES[p]); }} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
-        <Picker items={members} value={assignee} onPick={m => { setAssignee(m); void update("assignee", m); }} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} />
-        <Picker items={projects} value={project} onPick={p => { setProject(p); void update("project", p); }} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} />
-        <Picker items={labelOptions} value={labels} multi onPick={l => { const next = labels.includes(l) ? labels.filter(x => x !== l) : [...labels, l]; setLabels(next); void update("labels", next.length ? next.join(", ") : "none"); }} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} />
-      </div>
-      <div style={{ ...muted, fontSize: 12 }}>
-        {pending ? `Updating ${pending}…` : issue.createdAt ? `Created ${day(issue.createdAt)}${issue.completedAt ? ` · Done ${day(issue.completedAt)}` : ""}` : ""}
-      </div>
+      {changes.length > 0 || saving ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${v("border")}`, padding: "10px 16px" }}>
+          <span style={{ ...muted, fontSize: 12 }}>{saving ? "Saving to Linear…" : `${changes.length} ${changes.length === 1 ? "change" : "changes"}`}</span>
+          <span style={{ display: "inline-flex", gap: 8 }}>
+            <Button variant="secondary" size="sm" disabled={saving} onClick={discard}>Discard</Button>
+            <Button variant="primary" size="sm" disabled={saving || changes.length === 0} onClick={save}>{saving ? "Saving…" : "Save changes"}</Button>
+          </span>
+        </div>
+      ) : null}
     </section>
   );
 }

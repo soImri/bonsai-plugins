@@ -16,7 +16,7 @@ Two tools draw Linear's own UI in the chat. You supply the fields; the card draw
 
 ## Change an issue from its card
 
-The person changes a pill on the card. A message arrives like `Update NEAT-10: status → In Progress` (fields: status, priority, assignee, project, labels; labels is a full comma list or `none`). Apply exactly that change through the Linear MCP (`update_issue`), then confirm in one short line. Do not redraw the card.
+The person changes pills on the card and presses Save changes. One message arrives like `Update NEAT-10: status → In Progress; labels → Decision, Design` (fields separated by `;`: status, priority, assignee, project, labels; labels is the full comma list, `none` clears). Apply all of them in one Linear MCP `update_issue` call, then confirm in one short line. Do not redraw the card.
 
 ## Create an issue
 
