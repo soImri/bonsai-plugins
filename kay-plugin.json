@@ -35,6 +35,12 @@
               "toolName": "linearcards_newissue",
               "displayName": "Linear new issue",
               "description": "Draft a new Linear issue in the chat as Linear's create dialog, prefilled. The person edits and presses Create issue; the card sends the final values back as a message."
+            },
+            {
+              "localId": "view",
+              "toolName": "linearcards_view",
+              "displayName": "Linear view",
+              "description": "Show one or more Linear issues in the chat. Bonsai's Jev picks the view (one issue, a list, or a board by status) and the fields from the task."
             }
           ]
         }

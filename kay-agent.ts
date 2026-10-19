@@ -41,7 +41,71 @@ const issueFields = {
 
 const text = (t: string) => ({ content: [{ type: "text", text: t }], details: undefined });
 
+const issueItem = { type: "object", properties: issueFields, required: ["identifier", "title", "state", "priority"] };
+const optionsSchema = issueFields.options;
+
 export const activate = (api) => {
+  // Bonsai's Jev lane, when the host binds one. Without it the fallback decides.
+  const withJev = typeof api.withJev === "function" ? api.withJev : (_use, fallback) => Promise.resolve(fallback());
+
+  api.registerTool({
+    name: "linearcards_view",
+    label: "Linear view",
+    description:
+      "Show one or more Linear issues in the chat. Pass the person's request as task and the issues you read from linear:// (compact fields). Bonsai's Jev picks the view (one issue in full, a list of rows, or a board grouped by status) and which fields to show; the card draws it. Use for 'what's open', 'my issues', 'what's in progress', 'triage', or any ask about several issues.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "The person's request, in their words." },
+        issues: { type: "array", items: issueItem },
+        options: optionsSchema,
+      },
+      required: ["task", "issues"],
+    },
+    async execute(_id, params, signal) {
+      const issues = params.issues ?? [];
+      const n = issues.length;
+      const byCount = () => ({ view: n === 1 ? "issue" : n > 6 ? "board" : "list", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true }, by: "fallback" });
+      const composition = await withJev(
+        async (jev) => {
+          const { answers } = await jev.classify({
+            state: {
+              task: params.task,
+              count: n,
+              sample: issues.slice(0, 6).map((i) => ({ identifier: i.identifier, title: i.title, state: i.state?.name, priority: i.priority, hasDescription: Boolean(i.description) })),
+            },
+            questions: {
+              view: {
+                type: "choice",
+                instructions: "Pick the Linear view that answers the task best. Judge the task wording and how many issues there are.",
+                criteria: {
+                  issue: "One issue in full: title, description, properties. The task is about a single issue.",
+                  list: "Several issues as compact rows, to scan or triage.",
+                  board: "Several issues grouped by status, to see where work stands or what is blocked.",
+                },
+              },
+              description: { type: "bool", instructions: "Should the view show each issue's description?", criteria: { true: "The task needs the body text to judge the issue.", false: "Titles and properties are enough." } },
+              labels: { type: "bool", instructions: "Should the view show labels?", criteria: { true: "Labels help the task (categories, decisions, bugs).", false: "Labels are noise for this task." } },
+              dates: { type: "bool", instructions: "Should the view show created and done dates?", criteria: { true: "Timing matters for the task.", false: "Timing does not matter." } },
+              assignee: { type: "bool", instructions: "Should the view show the assignee?", criteria: { true: "Who owns each issue matters.", false: "Ownership does not matter for this task." } },
+            },
+          });
+          const v = answers.view;
+          if (v?.type !== "choice") return undefined;
+          const yes = (k) => answers[k]?.type === "bool" && answers[k].probability >= 0.5;
+          return { view: n === 1 && v.choice !== "issue" ? "issue" : v.choice, fields: { description: yes("description"), labels: yes("labels"), dates: yes("dates"), assignee: yes("assignee") }, by: "jev", confidence: v.confidence };
+        },
+        byCount,
+        { timeoutMs: 4000, purpose: "linear-view", ...(signal ? { signal } : {}) },
+      );
+      const who = composition.by === "jev" ? "Jev picked" : "default pick, Jev unavailable";
+      return {
+        content: [{ type: "text", text: `Composed a ${composition.view} view of ${n} issue${n === 1 ? "" : "s"} (${who}). The card is the answer; add at most one short line.` }],
+        details: { composition },
+      };
+    },
+  });
+
   api.registerTool({
     name: "linearcards_issue",
     label: "Linear issue card",

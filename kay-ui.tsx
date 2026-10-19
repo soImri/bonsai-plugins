@@ -276,9 +276,83 @@ function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   );
 }
 
+/* ---------- Composed view: one issue, a list, or a board (Jev picks) ---------- */
+type Composition = { view: "issue" | "list" | "board"; fields: { description?: boolean; labels?: boolean; dates?: boolean; assignee?: boolean }; by: "jev" | "fallback"; confidence?: number };
+type ViewArgs = { task: string; issues: Issue[]; options?: Issue["options"] };
+const STATE_ORDER = ["started", "unstarted", "backlog", "completed", "canceled"];
+
+function readComposition(rawResult: string | undefined, n: number): Composition {
+  const fallback: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true }, by: "fallback" };
+  if (!rawResult) return fallback;
+  const r = parse<any>(rawResult);
+  const c = r?.details?.composition ?? r?.composition;
+  if (c?.view) return c as Composition;
+  const m = rawResult.match(/"composition":(\{[^{}]*\{[^{}]*\}[^{}]*\})/);
+  if (m) { const c2 = parse<Composition>(m[1]); if (c2?.view) return c2; }
+  return fallback;
+}
+
+function IssueRow({ issue, fields, onOpen }: { issue: Issue; fields: Composition["fields"]; onOpen: (id: string) => void }) {
+  return (
+    <button type="button" onClick={() => onOpen(issue.identifier)} title={`Open ${issue.identifier}`}
+      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "7px 8px", border: 0, borderRadius: 8, background: "transparent", color: v("text-primary"), font: "inherit", textAlign: "left", cursor: "pointer" }}
+      onMouseEnter={e => (e.currentTarget.style.background = v("interactive-hover"))} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+      <span style={{ display: "inline-flex", width: 14, justifyContent: "center" }}><PriorityGlyph p={issue.priority} /></span>
+      <span style={{ ...muted, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, width: 64, flexShrink: 0 }}>{issue.identifier}</span>
+      <span style={{ display: "inline-flex", width: 14, justifyContent: "center" }}><StatusGlyph type={issue.state.type} /></span>
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14 }}>{issue.title}</span>
+      {fields.labels ? (issue.labels ?? []).slice(0, 2).map(l => <Pill key={l} size="sm" surface="glass" lead={<LabelGlyph />}>{l}</Pill>) : null}
+      {fields.assignee && issue.assignee ? <Pill size="sm" surface="glass" lead={<UserGlyph />}>{issue.assignee}</Pill> : null}
+      {fields.dates && issue.createdAt ? <span style={{ ...muted, fontSize: 12, flexShrink: 0 }}>{day(issue.createdAt)}</span> : null}
+    </button>
+  );
+}
+
+function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
+  const args = useMemo(() => parse<ViewArgs>(rawArgs), [rawArgs]);
+  const actions = useKayActions(sessionId);
+  const issues = args?.issues ?? [];
+  const comp = useMemo(() => readComposition(rawResult, issues.length), [rawResult, issues.length]);
+  if (!args || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Composing view…" : "No issues."}</div>;
+  const open = (id: string) => { void actions.sendMessage(`Show ${id}`); };
+  const team = issues[0]?.identifier.split("-")[0] ?? "";
+  const caption = `${comp.view === "issue" ? "Issue" : comp.view === "list" ? "List" : "Board"} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}`;
+
+  if (comp.view === "issue" && issues.length >= 1) {
+    const one = { ...issues[0], options: issues[0].options ?? args.options };
+    if (!comp.fields.description) delete (one as any).description;
+    return <IssueCard phase={phase} rawArgs={JSON.stringify(one)} sessionId={sessionId} />;
+  }
+
+  const groups = comp.view === "board"
+    ? [...new Map(issues.map(i => [i.state.name, i.state])).values()]
+        .sort((a, b) => STATE_ORDER.indexOf(a.type ?? "") - STATE_ORDER.indexOf(b.type ?? ""))
+        .map(st => ({ state: st, items: issues.filter(i => i.state.name === st.name) }))
+    : [{ state: undefined as State | undefined, items: issues }];
+
+  return (
+    <section style={card}>
+      <div style={{ ...pad, gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
+          <span style={{ ...muted, fontSize: 12 }}>{args.task}</span>
+        </div>
+        {groups.map((g, gi) => (
+          <div key={g.state?.name ?? "all"} style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: gi === 0 ? 2 : 8 }}>
+            {g.state ? <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 8px", fontSize: 13, fontWeight: 600 }}><StatusGlyph type={g.state.type} />{g.state.name}<span style={{ ...muted, fontWeight: 400 }}>{g.items.length}</span></div> : null}
+            {g.items.map(i => <IssueRow key={i.identifier} issue={i} fields={comp.fields} onOpen={open} />)}
+          </div>
+        ))}
+      </div>
+      <div style={{ borderTop: `1px solid ${v("border")}`, padding: "8px 16px", ...muted, fontSize: 12 }}>{caption}</div>
+    </section>
+  );
+}
+
 export default function activate(api) {
   const presentation = { venue: "inline", grouping: "standalone", disclosure: "always-open" } as const;
   const a = api.slots.registerToolRenderer("linearcards_issue", IssueCard, presentation);
   const b = api.slots.registerToolRenderer("linearcards_newissue", NewIssueCard, presentation);
-  return { dispose() { a.dispose(); b.dispose(); } };
+  const c = api.slots.registerToolRenderer("linearcards_view", ComposedView, presentation);
+  return { dispose() { a.dispose(); b.dispose(); c.dispose(); } };
 }
