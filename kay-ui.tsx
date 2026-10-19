@@ -1,69 +1,63 @@
 /**
- * Connector cards — UI side.
+ * Connector cards — UI side. Linear's component library for Bonsai's chat.
  *
- * Registers two inline tool renderers so `linearcards_issue` and
- * `linearcards_newissue` draw as Linear's issue view and create dialog inside
- * the chat. Single file on purpose: Bonsai bundles a plugin's UI entry on its
- * own, without relative imports.
+ * Components: TeamChip, StatusGlyph, PriorityGlyph, Picker (portal menu), PropertyPills,
+ * SaveBar, CommentComposer, Description, IssueRow, GroupHeader, ProgressBar.
+ * Compositions: IssueCard (core), NewIssueCard, and ComposedView (list, board, project).
+ * Jev picks the composition and fields at runtime (see kay-agent.ts); this file draws them.
+ *
+ * Single file on purpose: Bonsai bundles a plugin's UI entry on its own, no relative imports.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button, Pill } from "@bonsai/plugin-ui-sdk/ui";
 import { useKayActions } from "@bonsai/frontend-sdk";
 
+/* ---------- types ---------- */
 type State = { name: string; type?: string };
+type Options = { states?: State[]; projects?: string[]; labels?: string[]; members?: string[] };
 type Issue = {
-  identifier: string;
-  title: string;
-  description?: string;
-  url?: string;
-  state: State;
-  priority: number;
-  assignee?: string;
-  project?: string;
-  labels?: string[];
-  createdAt?: string;
-  completedAt?: string;
-  options?: { states?: State[]; projects?: string[]; labels?: string[]; members?: string[] };
+  identifier: string; title: string; description?: string; url?: string;
+  state: State; priority: number; assignee?: string; project?: string; labels?: string[];
+  createdAt?: string; completedAt?: string; options?: Options; commentDraft?: string;
 };
-type Draft = {
-  team: string;
-  title: string;
-  description?: string;
-  state: string;
-  priority: number;
-  assignee?: string;
-  project?: string;
-  labels?: string[];
-  options?: { states?: State[]; projects?: string[]; labels?: string[]; members?: string[] };
-};
+type Draft = { team: string; title: string; description?: string; state: string; priority: number; assignee?: string; project?: string; labels?: string[]; options?: Options };
+type Fields = { description?: boolean; labels?: boolean; dates?: boolean; assignee?: boolean; project?: boolean };
+type Composition = { view: "issue" | "list" | "board" | "project"; groupBy?: "status" | "project" | "assignee" | "priority"; sort?: "priority" | "newest" | "none"; fields: Fields; by: "jev" | "fallback"; confidence?: number };
+type ViewArgs = { task: string; issues: Issue[]; options?: Options; project?: { name: string; lead?: string; targetDate?: string; description?: string } };
 type RendererProps = { phase: string; rawArgs?: string; rawResult?: string; sessionId: string };
+type Props = { state?: State; priority: number; assignee?: string; project?: string; labels: string[] };
 
+/* ---------- tokens and helpers ---------- */
 const v = (n: string) => `var(--kay-color-${n})`;
 const PRIORITIES = ["No priority", "Urgent", "High", "Medium", "Low"];
 const DEFAULT_STATES: State[] = [
-  { name: "Backlog", type: "backlog" },
-  { name: "Todo", type: "unstarted" },
-  { name: "In Progress", type: "started" },
-  { name: "In Review", type: "started" },
-  { name: "Done", type: "completed" },
-  { name: "Canceled", type: "canceled" },
+  { name: "Backlog", type: "backlog" }, { name: "Todo", type: "unstarted" }, { name: "In Progress", type: "started" },
+  { name: "In Review", type: "started" }, { name: "Done", type: "completed" }, { name: "Canceled", type: "canceled" },
 ];
-
-const card: CSSProperties = { border: `1px solid ${v("border")}`, borderRadius: 12, background: v("bg-elevated"), overflow: "hidden", maxWidth: 680, color: v("text-primary"), fontSize: 14 };
+const STATE_ORDER = ["started", "unstarted", "backlog", "completed", "canceled"];
+const card: CSSProperties = { border: `1px solid ${v("border")}`, borderRadius: 12, background: v("bg-elevated"), overflow: "hidden", maxWidth: 720, color: v("text-primary"), fontSize: 14 };
 const pad: CSSProperties = { padding: "18px 20px 14px", display: "flex", flexDirection: "column", gap: 12 };
 const bare: CSSProperties = { width: "100%", background: "transparent", border: 0, outline: "none", padding: 0, color: v("text-primary"), font: "inherit", resize: "none" };
 const muted: CSSProperties = { color: v("text-secondary") };
 const row: CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 };
-
-function parse<T>(raw: string | undefined): T | null {
-  if (!raw) return null;
-  try { return JSON.parse(raw) as T; } catch { return null; }
-}
+const mono: CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
+const footer: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${v("border")}`, padding: "10px 16px" };
+function parse<T>(raw: string | undefined): T | null { if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } }
 const day = (s?: string) => (s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
+const propsOf = (i: Issue, states: State[]): Props => ({ state: states.find(s => s.name === i.state?.name) ?? i.state, priority: i.priority ?? 0, assignee: i.assignee, project: i.project, labels: i.labels ?? [] });
+function diff(a: Props, b: Props): string[] {
+  const out: string[] = [];
+  if (a.state?.name !== b.state?.name) out.push(`status → ${b.state?.name}`);
+  if (a.priority !== b.priority) out.push(`priority → ${PRIORITIES[b.priority]}`);
+  if (a.assignee !== b.assignee) out.push(`assignee → ${b.assignee ?? "none"}`);
+  if (a.project !== b.project) out.push(`project → ${b.project ?? "none"}`);
+  if (a.labels.join("|") !== b.labels.join("|")) out.push(`labels → ${b.labels.length ? b.labels.join(", ") : "none"}`);
+  return out;
+}
 
-/* Glyphs: Linear's status circles and priority bars, as small inline SVGs. */
+/* ---------- glyphs ---------- */
 function StatusGlyph({ type }: { type?: string }) {
   const c = type === "completed" ? v("success") : type === "started" ? v("warning") : type === "canceled" ? v("text-muted") : v("text-secondary");
   if (type === "completed") return <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6.5" fill={c} /><path d="M4 7.2l2 2 4-4.4" stroke="white" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>;
@@ -80,13 +74,13 @@ function PriorityGlyph({ p }: { p: number }) {
 const UserGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="4.5" r="2.6" fill="currentColor" /><path d="M2 12.5c.6-2.9 2.4-4.3 5-4.3s4.4 1.4 5 4.3z" fill="currentColor" /></svg>;
 const ProjectGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M7 1.5l5 2.8v5.4L7 12.5 2 9.7V4.3z" /><path d="M2 4.3l5 2.8 5-2.8M7 7.1v5.4" /></svg>;
 const LabelGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 7.2V2.5h4.7L12 7.8 7.3 12.5z" strokeLinejoin="round" /><circle cx="5" cy="5.5" r="1" fill="currentColor" stroke="none" /></svg>;
+const OpenGlyph = () => <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v7A1.5 1.5 0 0 0 3.5 13h7a1.5 1.5 0 0 0 1.5-1.5V9M9 2h4v4M13 2L7 8" /></svg>;
 const TeamChip = ({ k }: { k: string }) => <Pill size="sm" surface="glass" lead={<span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: v("success") }} />}>{k}</Pill>;
 
-/* A pill that opens a list. Plain React: the plugin UI SDK exposes Pill but no menu.
-   The list is portaled to <body> so a card's overflow or the transcript's scroll clip never cuts it. */
-function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi }: {
+/* ---------- Picker: a pill (or a bare glyph) that opens a portaled list ---------- */
+function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title }: {
   items: T[]; value: T | T[] | undefined; onPick: (t: T) => void; label: string;
-  lead: (t: T | undefined) => ReactNode; keyOf: (t: T) => string; labelOf: (t: T) => string; emphasis?: boolean; multi?: boolean;
+  lead: (t: T | undefined) => ReactNode; keyOf: (t: T) => string; labelOf: (t: T) => string; emphasis?: boolean; multi?: boolean; compact?: boolean; title?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -103,17 +97,22 @@ function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis
     if (!open) return;
     const down = (e: MouseEvent) => { const t = e.target as Node; if (!trigger.current?.contains(t) && !menu.current?.contains(t)) setOpen(false); };
     const close = () => setOpen(false);
-    document.addEventListener("mousedown", down);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
+    document.addEventListener("mousedown", down); window.addEventListener("scroll", close, true); window.addEventListener("resize", close);
     return () => { document.removeEventListener("mousedown", down); window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
   }, [open]);
   const selected = Array.isArray(value) ? value : value === undefined ? [] : [value];
   const text = selected.length ? selected.map(labelOf).join(", ") : label;
   const isSel = (t: T) => selected.some(s => keyOf(s) === keyOf(t));
+  const single = Array.isArray(value) ? undefined : value;
   return (
-    <div ref={trigger} style={{ display: "inline-flex" }}>
-      <Pill tone={emphasis ? "emphasis" : "neutral"} surface={emphasis ? "bare" : "glass"} caret lead={lead(Array.isArray(value) ? undefined : value)} onClick={() => setOpen(o => !o)} aria-expanded={open}>{text}</Pill>
+    <div ref={trigger} style={{ display: "inline-flex" }} onClick={e => e.stopPropagation()}>
+      {compact
+        ? <button type="button" title={title ?? `${label}: ${text}`} aria-label={`${label}: ${text}`} aria-expanded={open} onClick={() => setOpen(o => !o)}
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 22, height: 22, border: 0, borderRadius: 5, background: open ? v("interactive-hover") : "transparent", color: v("text-secondary"), cursor: "pointer", padding: "0 3px" }}
+            onMouseEnter={e => (e.currentTarget.style.background = v("interactive-hover"))} onMouseLeave={e => (e.currentTarget.style.background = open ? v("interactive-hover") : "transparent")}>
+            {lead(single)}
+          </button>
+        : <Pill tone={emphasis ? "emphasis" : "neutral"} surface={emphasis ? "bare" : "glass"} caret lead={lead(single)} onClick={() => setOpen(o => !o)} aria-expanded={open}>{text}</Pill>}
       {open && pos ? createPortal(
         <div ref={menu} role="listbox" style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 1000, minWidth: 180, maxHeight: 290, overflowY: "auto", padding: 4, borderRadius: 8, border: `1px solid ${v("border")}`, background: v("bg-floating"), boxShadow: "0 8px 24px rgba(0,0,0,.14)", color: v("text-primary"), fontSize: 13 }}>
           {items.length === 0 ? <div style={{ padding: "6px 8px", color: v("text-secondary") }}>No options</div> : null}
@@ -131,6 +130,61 @@ function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis
   );
 }
 
+/* ---------- PropertyPills: Linear's five properties as pickers ---------- */
+function PropertyPills({ value, options, onChange, fields }: { value: Props; options: Options | undefined; onChange: (next: Props) => void; fields?: Fields }) {
+  const states = options?.states?.length ? options.states : DEFAULT_STATES;
+  const members = options?.members ?? (value.assignee ? [value.assignee] : []);
+  const projects = options?.projects ?? (value.project ? [value.project] : []);
+  const labelOptions = options?.labels ?? value.labels;
+  const f = fields ?? {};
+  const show = (k: keyof Fields) => f[k] !== false;
+  return (
+    <div style={row}>
+      <Picker items={states} value={value.state} onPick={s => onChange({ ...value, state: s })} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
+      <Picker items={[0, 1, 2, 3, 4]} value={value.priority} onPick={p => onChange({ ...value, priority: p })} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
+      {show("assignee") ? <Picker items={members} value={value.assignee} onPick={m => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} /> : null}
+      {show("project") ? <Picker items={projects} value={value.project} onPick={p => onChange({ ...value, project: p })} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} /> : null}
+      {show("labels") ? <Picker items={labelOptions} value={value.labels} multi onPick={l => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter(x => x !== l) : [...value.labels, l] })} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} /> : null}
+    </div>
+  );
+}
+
+function SaveBar({ count, saving, onDiscard, onSave, note }: { count: number; saving: boolean; onDiscard: () => void; onSave: () => void; note?: string }) {
+  if (count === 0 && !saving) return note ? <div style={{ ...footer, ...muted, fontSize: 12 }}>{note}</div> : null;
+  return (
+    <div style={footer}>
+      <span style={{ ...muted, fontSize: 12 }}>{saving ? "Saving to Linear…" : `${count} ${count === 1 ? "change" : "changes"}`}</span>
+      <span style={{ display: "inline-flex", gap: 8 }}>
+        <Button variant="secondary" size="sm" disabled={saving} onClick={onDiscard}>Discard</Button>
+        <Button variant="primary" size="sm" disabled={saving || count === 0} onClick={onSave}>{saving ? "Saving…" : "Save changes"}</Button>
+      </span>
+    </div>
+  );
+}
+
+function CommentComposer({ identifier, draft, sessionId }: { identifier: string; draft?: string; sessionId: string }) {
+  const actions = useKayActions(sessionId);
+  const [text, setText] = useState(draft ?? "");
+  const [open, setOpen] = useState(Boolean(draft));
+  const [posting, setPosting] = useState(false);
+  useEffect(() => { if (draft) { setText(draft); setOpen(true); } }, [draft]);
+  async function post() {
+    setPosting(true);
+    await actions.sendMessage(`Comment on ${identifier}: ${text.trim()}`);
+    setPosting(false); setText(""); setOpen(false);
+  }
+  if (!open) return <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
+      <textarea autoFocus style={{ ...bare, lineHeight: "22px" }} rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="Leave a comment…" aria-label="Comment" disabled={posting} />
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="secondary" size="sm" disabled={posting} onClick={() => { setOpen(false); setText(""); }}>Cancel</Button>
+        <Button variant="primary" size="sm" disabled={posting || !text.trim()} onClick={post}>{posting ? "Posting…" : "Comment"}</Button>
+      </div>
+    </div>
+  );
+}
+
 function Description({ md }: { md: string }) {
   const [open, setOpen] = useState(false);
   const lines = md.replace(/`/g, "").split("\n").filter(l => l.trim());
@@ -143,169 +197,118 @@ function Description({ md }: { md: string }) {
   );
 }
 
-/* ---------- Issue view (live pills, batched save) ---------- */
+/* ---------- IssueCard: the core view ---------- */
 function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const issue = useMemo(() => parse<Issue>(rawArgs), [rawArgs]);
   const actions = useKayActions(sessionId);
   const states = issue?.options?.states?.length ? issue.options.states : DEFAULT_STATES;
-  const initial = useMemo(() => ({
-    state: issue ? (states.find(s => s.name === issue.state.name) ?? issue.state) : undefined,
-    priority: issue?.priority ?? 0,
-    assignee: issue?.assignee,
-    project: issue?.project,
-    labels: issue?.labels ?? [],
-  }), [issue]);
-  const [saved, setSaved] = useState(initial);
-  const [state, setState] = useState<State | undefined>(initial.state);
-  const [priority, setPriority] = useState(initial.priority);
-  const [assignee, setAssignee] = useState<string | undefined>(initial.assignee);
-  const [project, setProject] = useState<string | undefined>(initial.project);
-  const [labels, setLabels] = useState<string[]>(initial.labels);
+  const initial = useMemo<Props>(() => (issue ? propsOf(issue, states) : { priority: 0, labels: [] }), [issue]);
+  const [saved, setSaved] = useState<Props>(initial);
+  const [cur, setCur] = useState<Props>(initial);
   const [saving, setSaving] = useState(false);
-  const dirtyRef = useRef(false);
-  useEffect(() => {
-    // Args can arrive in pieces while the call streams; once they settle, re-seed unless the person already edited.
-    if (dirtyRef.current) return;
-    setSaved(initial); setState(initial.state); setPriority(initial.priority); setAssignee(initial.assignee); setProject(initial.project); setLabels(initial.labels);
-  }, [initial]);
+  const dirty = useRef(false);
+  useEffect(() => { if (!dirty.current) { setSaved(initial); setCur(initial); } }, [initial]);
   if (!issue || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Loading issue…" : "No issue data."}</div>;
-  const team = issue.identifier.split("-")[0];
-  const members = issue.options?.members ?? (assignee ? [assignee] : []);
-  const projects = issue.options?.projects ?? (project ? [project] : []);
-  const labelOptions = issue.options?.labels ?? labels;
-
-  const changes: string[] = [];
-  if (state?.name !== saved.state?.name) changes.push(`status → ${state?.name}`);
-  if (priority !== saved.priority) changes.push(`priority → ${PRIORITIES[priority]}`);
-  if (assignee !== saved.assignee) changes.push(`assignee → ${assignee ?? "none"}`);
-  if (project !== saved.project) changes.push(`project → ${project ?? "none"}`);
-  if (labels.join("|") !== saved.labels.join("|")) changes.push(`labels → ${labels.length ? labels.join(", ") : "none"}`);
-  dirtyRef.current = changes.length > 0;
-
-  function discard() { setState(saved.state); setPriority(saved.priority); setAssignee(saved.assignee); setProject(saved.project); setLabels(saved.labels); }
-  async function save() {
-    setSaving(true);
-    const next = { state, priority, assignee, project, labels };
-    await actions.sendMessage(`Update ${issue!.identifier}: ${changes.join("; ")}`);
-    setSaved(next); setSaving(false);
-  }
-
+  const changes = diff(saved, cur); dirty.current = changes.length > 0;
+  async function save() { setSaving(true); const next = cur; await actions.sendMessage(`Update ${issue!.identifier}: ${changes.join("; ")}`); setSaved(next); setSaving(false); }
   return (
     <section style={card}>
       <div style={pad}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ ...row, fontSize: 12, ...muted }}><TeamChip k={team} /><span>›</span><span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{issue.identifier}</span></div>
-          {issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" aria-label="Open in Linear" style={{ ...muted, display: "inline-flex" }}><svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v7A1.5 1.5 0 0 0 3.5 13h7a1.5 1.5 0 0 0 1.5-1.5V9M9 2h4v4M13 2L7 8" /></svg></a> : null}
+          <div style={{ ...row, fontSize: 12, ...muted }}><TeamChip k={issue.identifier.split("-")[0]} /><span>›</span><span style={mono}>{issue.identifier}</span></div>
+          {issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" aria-label="Open in Linear" style={{ ...muted, display: "inline-flex" }}><OpenGlyph /></a> : null}
         </div>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
         {issue.description ? <Description md={issue.description} /> : null}
-        <div style={{ ...row, paddingTop: 2, pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}>
-          <Picker items={states} value={state} onPick={setState} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
-          <Picker items={[0, 1, 2, 3, 4]} value={priority} onPick={setPriority} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
-          <Picker items={members} value={assignee} onPick={setAssignee} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} />
-          <Picker items={projects} value={project} onPick={setProject} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} />
-          <Picker items={labelOptions} value={labels} multi onPick={l => setLabels(ls => ls.includes(l) ? ls.filter(x => x !== l) : [...ls, l])} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} />
+        <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}>
+          <PropertyPills value={cur} options={issue.options} onChange={setCur} />
         </div>
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {day(issue.createdAt)}{issue.completedAt ? ` · Done ${day(issue.completedAt)}` : ""}</div> : null}
+        <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} sessionId={sessionId} />
       </div>
-      {changes.length > 0 || saving ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${v("border")}`, padding: "10px 16px" }}>
-          <span style={{ ...muted, fontSize: 12 }}>{saving ? "Saving to Linear…" : `${changes.length} ${changes.length === 1 ? "change" : "changes"}`}</span>
-          <span style={{ display: "inline-flex", gap: 8 }}>
-            <Button variant="secondary" size="sm" disabled={saving} onClick={discard}>Discard</Button>
-            <Button variant="primary" size="sm" disabled={saving || changes.length === 0} onClick={save}>{saving ? "Saving…" : "Save changes"}</Button>
-          </span>
-        </div>
-      ) : null}
+      <SaveBar count={changes.length} saving={saving} onDiscard={() => setCur(saved)} onSave={save} />
     </section>
   );
 }
 
-/* ---------- Create dialog ---------- */
+/* ---------- NewIssueCard: Linear's create dialog ---------- */
 function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const draft = useMemo(() => parse<Draft>(rawArgs), [rawArgs]);
   const actions = useKayActions(sessionId);
   const states = draft?.options?.states?.length ? draft.options.states : DEFAULT_STATES;
-  const [title, setTitle] = useState(draft?.title ?? "");
-  const [desc, setDesc] = useState(draft?.description ?? "");
-  const [state, setState] = useState<State | undefined>(() => states.find(s => s.name === draft?.state) ?? states[1]);
-  const [priority, setPriority] = useState(draft?.priority ?? 0);
-  const [assignee, setAssignee] = useState<string | undefined>(draft?.assignee);
-  const [project, setProject] = useState<string | undefined>(draft?.project);
-  const [labels, setLabels] = useState<string[]>(draft?.labels ?? []);
+  const seed = useMemo<Props & { title: string; desc: string }>(() => ({
+    title: draft?.title ?? "", desc: draft?.description ?? "",
+    state: states.find(s => s.name === draft?.state) ?? states[1], priority: draft?.priority ?? 0, assignee: draft?.assignee, project: draft?.project, labels: draft?.labels ?? [],
+  }), [draft]);
+  const [title, setTitle] = useState(seed.title);
+  const [desc, setDesc] = useState(seed.desc);
+  const [props, setProps] = useState<Props>(seed);
   const [sent, setSent] = useState(false);
   const touched = useRef(false);
-  useEffect(() => {
-    if (touched.current || !draft) return;
-    setTitle(draft.title ?? ""); setDesc(draft.description ?? "");
-    setState(states.find(s => s.name === draft.state) ?? states[1]); setPriority(draft.priority ?? 0);
-    setAssignee(draft.assignee); setProject(draft.project); setLabels(draft.labels ?? []);
-  }, [draft]);
+  useEffect(() => { if (!touched.current) { setTitle(seed.title); setDesc(seed.desc); setProps(seed); } }, [seed]);
   if (!draft || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Preparing draft…" : "No draft data."}</div>;
-  const members = draft.options?.members ?? (assignee ? [assignee] : []);
-  const projects = draft.options?.projects ?? (project ? [project] : []);
-  const labelOptions = draft.options?.labels ?? labels;
-  const locked = sent;
-
   async function create() {
-    const final = { team: draft!.team, title: title.trim(), description: desc.trim(), state: state?.name, priority, assignee, project, labels };
-    const summary = [state?.name, PRIORITIES[priority], assignee, project, labels.length ? labels.join(", ") : null].filter(Boolean).join(" · ");
+    const final = { team: draft!.team, title: title.trim(), description: desc.trim(), state: props.state?.name, priority: props.priority, assignee: props.assignee, project: props.project, labels: props.labels };
+    const summary = [props.state?.name, PRIORITIES[props.priority], props.assignee, props.project, props.labels.length ? props.labels.join(", ") : null].filter(Boolean).join(" · ");
     setSent(true);
     await actions.sendMessage(`Create Linear issue in ${draft!.team}: "${final.title}" — ${summary}\n\n\`\`\`json\n${JSON.stringify(final, null, 2)}\n\`\`\``);
   }
-
   return (
     <section style={card}>
-      <div style={pad}>
+      <div style={{ ...pad, paddingBottom: 12 }}>
         <TeamChip k={draft.team} />
-        <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => { touched.current = true; setTitle(e.target.value); }} placeholder="Issue title" aria-label="Issue title" disabled={locked} />
-        <textarea style={{ ...bare, lineHeight: "22px" }} rows={3} value={desc} onChange={e => { touched.current = true; setDesc(e.target.value); }} placeholder="Add description…" aria-label="Add description" disabled={locked} />
-        <div style={{ ...row, pointerEvents: locked ? "none" : "auto", opacity: locked ? 0.7 : 1 }}>
-          <Picker items={states} value={state} onPick={s => { touched.current = true; setState(s); }} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
-          <Picker items={[0, 1, 2, 3, 4]} value={priority} onPick={p => { touched.current = true; setPriority(p); }} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
-          <Picker items={members} value={assignee} onPick={m => { touched.current = true; setAssignee(m); }} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} />
-          <Picker items={projects} value={project} onPick={p => { touched.current = true; setProject(p); }} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} />
-          <Picker items={labelOptions} value={labels} multi onPick={l => { touched.current = true; setLabels(ls => ls.includes(l) ? ls.filter(x => x !== l) : [...ls, l]); }} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} />
+        <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => { touched.current = true; setTitle(e.target.value); }} placeholder="Issue title" aria-label="Issue title" disabled={sent} />
+        <textarea style={{ ...bare, lineHeight: "22px" }} rows={3} value={desc} onChange={e => { touched.current = true; setDesc(e.target.value); }} placeholder="Add description…" aria-label="Add description" disabled={sent} />
+        <div style={{ pointerEvents: sent ? "none" : "auto", opacity: sent ? 0.7 : 1 }}>
+          <PropertyPills value={props} options={draft.options} onChange={p => { touched.current = true; setProps(p); }} />
         </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${v("border")}`, padding: "10px 16px" }}>
+      <div style={footer}>
         <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear…" : ""}</span>
-        <Button variant="primary" size="sm" disabled={locked || !title.trim()} onClick={create}>{sent ? "Creating…" : "Create issue"}</Button>
+        <Button variant="primary" size="sm" disabled={sent || !title.trim()} onClick={create}>{sent ? "Creating…" : "Create issue"}</Button>
       </div>
     </section>
   );
 }
 
-/* ---------- Composed view: one issue, a list, or a board (Jev picks) ---------- */
-type Composition = { view: "issue" | "list" | "board"; fields: { description?: boolean; labels?: boolean; dates?: boolean; assignee?: boolean }; by: "jev" | "fallback"; confidence?: number };
-type ViewArgs = { task: string; issues: Issue[]; options?: Issue["options"] };
-const STATE_ORDER = ["started", "unstarted", "backlog", "completed", "canceled"];
+/* ---------- rows, groups, progress ---------- */
+function IssueRow({ issue, value, onChange, options, fields, onOpen }: { issue: Issue; value: Props; onChange: (p: Props) => void; options?: Options; fields: Fields; onOpen: (id: string) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 8 }}
+      onMouseEnter={e => (e.currentTarget.style.background = v("interactive-hover"))} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+      <Picker compact items={[0, 1, 2, 3, 4]} value={value.priority} onPick={p => onChange({ ...value, priority: p })} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
+      <span style={{ ...muted, ...mono, fontSize: 12, width: 62, flexShrink: 0 }}>{issue.identifier}</span>
+      <Picker compact items={options?.states?.length ? options.states : DEFAULT_STATES} value={value.state} onPick={s => onChange({ ...value, state: s })} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} />
+      <button type="button" onClick={() => onOpen(issue.identifier)} title={`Open ${issue.identifier}`} style={{ ...bare, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left", cursor: "pointer", fontSize: 14 }}>{issue.title}</button>
+      {fields.labels !== false ? <Picker compact items={options?.labels ?? value.labels} value={value.labels} multi onPick={l => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter(x => x !== l) : [...value.labels, l] })} label="Labels" lead={() => value.labels.length ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}><LabelGlyph />{value.labels.length}</span> : <LabelGlyph />} keyOf={l => l} labelOf={l => l} /> : null}
+      {fields.assignee !== false ? <Picker compact items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={m => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} title={`Assignee: ${value.assignee ?? "none"}`} /> : null}
+      {fields.dates !== false && issue.createdAt ? <span style={{ ...muted, fontSize: 12, flexShrink: 0, width: 44, textAlign: "right" }}>{day(issue.createdAt)}</span> : null}
+    </div>
+  );
+}
+function GroupHeader({ lead, label, count }: { lead: ReactNode; label: string; count: number }) {
+  return <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 8px", fontSize: 13, fontWeight: 600 }}>{lead}{label}<span style={{ ...muted, fontWeight: 400 }}>{count}</span></div>;
+}
+function ProgressBar({ done, total }: { done: number; total: number }) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ flex: 1, height: 6, borderRadius: 3, background: v("bg-subtle"), overflow: "hidden" }}><div style={{ width: `${pct}%`, height: "100%", background: v("success") }} /></div>
+      <span style={{ ...muted, fontSize: 12, width: 96, textAlign: "right" }}>{done}/{total} done · {pct}%</span>
+    </div>
+  );
+}
 
+/* ---------- ComposedView: Jev picked issue / list / board / project ---------- */
 function readComposition(rawResult: string | undefined, n: number): Composition {
-  const fallback: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true }, by: "fallback" };
+  const fallback: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" };
   if (!rawResult) return fallback;
   const r = parse<any>(rawResult);
   const c = r?.details?.composition ?? r?.composition;
-  if (c?.view) return c as Composition;
+  if (c?.view) return { ...fallback, ...c, fields: { ...fallback.fields, ...(c.fields ?? {}) } };
   const m = rawResult.match(/"composition":(\{[^{}]*\{[^{}]*\}[^{}]*\})/);
-  if (m) { const c2 = parse<Composition>(m[1]); if (c2?.view) return c2; }
+  if (m) { const c2 = parse<Composition>(m[1]); if (c2?.view) return { ...fallback, ...c2, fields: { ...fallback.fields, ...(c2.fields ?? {}) } }; }
   return fallback;
-}
-
-function IssueRow({ issue, fields, onOpen }: { issue: Issue; fields: Composition["fields"]; onOpen: (id: string) => void }) {
-  return (
-    <button type="button" onClick={() => onOpen(issue.identifier)} title={`Open ${issue.identifier}`}
-      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "7px 8px", border: 0, borderRadius: 8, background: "transparent", color: v("text-primary"), font: "inherit", textAlign: "left", cursor: "pointer" }}
-      onMouseEnter={e => (e.currentTarget.style.background = v("interactive-hover"))} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-      <span style={{ display: "inline-flex", width: 14, justifyContent: "center" }}><PriorityGlyph p={issue.priority} /></span>
-      <span style={{ ...muted, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, width: 64, flexShrink: 0 }}>{issue.identifier}</span>
-      <span style={{ display: "inline-flex", width: 14, justifyContent: "center" }}><StatusGlyph type={issue.state.type} /></span>
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14 }}>{issue.title}</span>
-      {fields.labels ? (issue.labels ?? []).slice(0, 2).map(l => <Pill key={l} size="sm" surface="glass" lead={<LabelGlyph />}>{l}</Pill>) : null}
-      {fields.assignee && issue.assignee ? <Pill size="sm" surface="glass" lead={<UserGlyph />}>{issue.assignee}</Pill> : null}
-      {fields.dates && issue.createdAt ? <span style={{ ...muted, fontSize: 12, flexShrink: 0 }}>{day(issue.createdAt)}</span> : null}
-    </button>
-  );
 }
 
 function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
@@ -313,38 +316,70 @@ function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
   const actions = useKayActions(sessionId);
   const issues = args?.issues ?? [];
   const comp = useMemo(() => readComposition(rawResult, issues.length), [rawResult, issues.length]);
+  const states = args?.options?.states?.length ? args.options.states : DEFAULT_STATES;
+  const seed = useMemo(() => Object.fromEntries(issues.map(i => [i.identifier, propsOf(i, states)])) as Record<string, Props>, [args]);
+  const [saved, setSaved] = useState(seed);
+  const [cur, setCur] = useState(seed);
+  const [saving, setSaving] = useState(false);
+  const dirty = useRef(false);
+  useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); } }, [seed]);
   if (!args || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Composing view…" : "No issues."}</div>;
-  const open = (id: string) => { void actions.sendMessage(`Show ${id}`); };
-  const team = issues[0]?.identifier.split("-")[0] ?? "";
-  const caption = `${comp.view === "issue" ? "Issue" : comp.view === "list" ? "List" : "Board"} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}`;
 
   if (comp.view === "issue" && issues.length >= 1) {
     const one = { ...issues[0], options: issues[0].options ?? args.options };
-    if (!comp.fields.description) delete (one as any).description;
+    if (comp.fields.description === false) delete (one as any).description;
     return <IssueCard phase={phase} rawArgs={JSON.stringify(one)} sessionId={sessionId} />;
   }
 
-  const groups = comp.view === "board"
-    ? [...new Map(issues.map(i => [i.state.name, i.state])).values()]
-        .sort((a, b) => STATE_ORDER.indexOf(a.type ?? "") - STATE_ORDER.indexOf(b.type ?? ""))
-        .map(st => ({ state: st, items: issues.filter(i => i.state.name === st.name) }))
-    : [{ state: undefined as State | undefined, items: issues }];
+  const changes = issues.flatMap(i => { const d = saved[i.identifier] && cur[i.identifier] ? diff(saved[i.identifier], cur[i.identifier]) : []; return d.length ? [`Update ${i.identifier}: ${d.join("; ")}`] : []; });
+  dirty.current = changes.length > 0;
+  async function save() { setSaving(true); const next = cur; await actions.sendMessage(changes.join("\n")); setSaved(next); setSaving(false); }
+  const open = (id: string) => { void actions.sendMessage(`Show ${id}`); };
+  const team = issues[0]?.identifier.split("-")[0] ?? "";
+  const sorted = [...issues].sort((a, b) => comp.sort === "newest" ? (b.createdAt ?? "").localeCompare(a.createdAt ?? "") : comp.sort === "priority" ? ((a.priority || 9) - (b.priority || 9)) : 0);
+  const gb = comp.view === "board" || comp.view === "project" ? (comp.groupBy ?? "status") : undefined;
+  const stateOf = (i: Issue) => cur[i.identifier]?.state ?? i.state;
+  const keyFor = (i: Issue) => gb === "status" ? stateOf(i).name : gb === "project" ? (cur[i.identifier]?.project ?? "No project") : gb === "assignee" ? (cur[i.identifier]?.assignee ?? "Unassigned") : gb === "priority" ? PRIORITIES[cur[i.identifier]?.priority ?? 0] : "all";
+  const leadFor = (sample: Issue) => gb === "status" ? <StatusGlyph type={stateOf(sample).type} /> : gb === "project" ? <ProjectGlyph /> : gb === "assignee" ? <UserGlyph /> : gb === "priority" ? <PriorityGlyph p={cur[sample.identifier]?.priority ?? 0} /> : null;
+  const groupsMap = new Map<string, Issue[]>();
+  for (const i of sorted) { const k = keyFor(i); groupsMap.set(k, [...(groupsMap.get(k) ?? []), i]); }
+  const groups = [...groupsMap.entries()].sort((a, b) => gb === "status" ? STATE_ORDER.indexOf(stateOf(a[1][0]).type ?? "") - STATE_ORDER.indexOf(stateOf(b[1][0]).type ?? "") : gb === "priority" ? PRIORITIES.indexOf(a[0]) - PRIORITIES.indexOf(b[0]) : a[0].localeCompare(b[0]));
+  const done = issues.filter(i => stateOf(i).type === "completed").length;
+  const inProgress = issues.filter(i => stateOf(i).type === "started").length;
+  const viewName = comp.view === "list" ? "List" : comp.view === "board" ? `Board by ${gb}` : "Project";
+  const caption = `${viewName} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}`;
 
   return (
     <section style={card}>
       <div style={{ ...pad, gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
-          <span style={{ ...muted, fontSize: 12 }}>{args.task}</span>
-        </div>
-        {groups.map((g, gi) => (
-          <div key={g.state?.name ?? "all"} style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: gi === 0 ? 2 : 8 }}>
-            {g.state ? <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 8px", fontSize: 13, fontWeight: 600 }}><StatusGlyph type={g.state.type} />{g.state.name}<span style={{ ...muted, fontWeight: 400 }}>{g.items.length}</span></div> : null}
-            {g.items.map(i => <IssueRow key={i.identifier} issue={i} fields={comp.fields} onOpen={open} />)}
+        {comp.view === "project" ? (
+          <>
+            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>›</span><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ProjectGlyph />Project</span></div>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{args.project?.name ?? issues[0]?.project ?? "Project"}</h2>
+            {args.project?.description ? <div style={{ ...muted, lineHeight: "22px" }}>{args.project.description}</div> : null}
+            <ProgressBar done={done} total={issues.length} />
+            <div style={{ ...row, fontSize: 12, ...muted }}>
+              {args.project?.lead ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><UserGlyph />{args.project.lead}</span> : null}
+              {args.project?.targetDate ? <span>Target {day(args.project.targetDate)}</span> : null}
+              <span>{inProgress} in progress</span>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
+            <span style={{ ...muted, fontSize: 12, maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{args.task}</span>
           </div>
-        ))}
+        )}
+        <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}>
+          {groups.map(([key, items], gi) => (
+            <div key={key} style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: gi === 0 ? 2 : 10 }}>
+              {gb ? <GroupHeader lead={leadFor(items[0])} label={key} count={items.length} /> : null}
+              {items.map(i => <IssueRow key={i.identifier} issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={p => setCur(c => ({ ...c, [i.identifier]: p }))} options={args.options} fields={comp.fields} onOpen={open} />)}
+            </div>
+          ))}
+        </div>
       </div>
-      <div style={{ borderTop: `1px solid ${v("border")}`, padding: "8px 16px", ...muted, fontSize: 12 }}>{caption}</div>
+      <SaveBar count={changes.length} saving={saving} onDiscard={() => setCur(saved)} onSave={save} note={caption} />
     </section>
   );
 }

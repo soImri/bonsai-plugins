@@ -16,7 +16,18 @@ Two tools draw Linear's own UI in the chat. You supply the fields; the card draw
 
 ## Change an issue from its card
 
-The person changes pills on the card and presses Save changes. One message arrives like `Update NEAT-10: status → In Progress; labels → Decision, Design` (fields separated by `;`: status, priority, assignee, project, labels; labels is the full comma list, `none` clears). Apply all of them in one Linear MCP `update_issue` call, then confirm in one short line. Do not redraw the card.
+The person changes pills on a card and presses Save changes. A message arrives with one line per issue, like:
+
+```
+Update NEAT-10: status → In Progress; labels → Decision, Design
+Update NEAT-8: priority → High
+```
+
+Fields: status, priority, assignee, project, labels (labels is the full comma list; `none` clears). Apply each line through the Linear MCP (`update_issue`, one call per issue), then confirm in one short line naming the identifiers. Do not redraw the card.
+
+## Comment from the card
+
+The person types in the card's comment box and presses Comment. A message arrives like `Comment on NEAT-10: <text>`. Post exactly that text through the Linear MCP (`create_comment`), then confirm in one short line. To open the card with a comment prefilled ("comment on NEAT-10 that ..."), call `linearcards_issue` with `commentDraft`.
 
 ## Several issues, or an open-ended ask
 
@@ -24,8 +35,9 @@ For "what's open", "my issues", "what's in progress", "triage NEAT", or anything
 
 1. `search` or `list linear://issues` with the right filters.
 2. Call `linearcards_view` with `task` (the person's words), `issues` (compact fields for each: identifier, title, state, priority, assignee, project, labels, createdAt, and description only when short) and `options`.
-3. Bonsai's Jev picks the view (one issue, list, or board by status) and the fields. You do not choose the layout. Reply with at most one short line.
-4. A click on a row sends `Show <identifier>`; answer that with `linearcards_issue`.
+3. Bonsai's Jev picks the view (one issue, a list, a board grouped by status/project/assignee/priority, or a project view with a progress bar), the sort, and the fields. You do not choose the layout. Reply with at most one short line.
+4. When the ask is about one project ("how is Thin path going"), pass `project: { name, lead?, targetDate?, description? }` with that project's issues.
+5. A click on a row sends `Show <identifier>`; answer that with `linearcards_issue`.
 
 ## Create an issue
 

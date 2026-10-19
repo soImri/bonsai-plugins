@@ -27,6 +27,7 @@ const issueFields = {
   labels: { type: "array", items: { type: "string" } },
   createdAt: { type: "string", description: "ISO date. Optional." },
   completedAt: { type: "string", description: "ISO date. Optional." },
+  commentDraft: { type: "string", description: "Prefill the card's comment box with this text (the person presses Comment to post). Optional." },
   options: {
     type: "object",
     description: "The team's pick lists so the card's pills can change values. Optional but recommended.",
@@ -59,48 +60,76 @@ export const activate = (api) => {
         task: { type: "string", description: "The person's request, in their words." },
         issues: { type: "array", items: issueItem },
         options: optionsSchema,
+        project: { type: "object", description: "When the task is about one project, its header facts. Optional.", properties: { name: { type: "string" }, lead: { type: "string" }, targetDate: { type: "string" }, description: { type: "string" } }, required: ["name"] },
       },
       required: ["task", "issues"],
     },
     async execute(_id, params, signal) {
       const issues = params.issues ?? [];
       const n = issues.length;
-      const byCount = () => ({ view: n === 1 ? "issue" : n > 6 ? "board" : "list", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true }, by: "fallback" });
+      const byCount = () => ({ view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" });
       const composition = await withJev(
         async (jev) => {
+          const sample = issues.slice(0, 8).map((i) => ({ identifier: i.identifier, title: i.title, state: i.state?.name, stateType: i.state?.type, priority: i.priority, project: i.project, assignee: i.assignee, labels: i.labels, hasDescription: Boolean(i.description) }));
+          const projects = [...new Set(issues.map((i) => i.project).filter(Boolean))];
           const { answers } = await jev.classify({
-            state: {
-              task: params.task,
-              count: n,
-              sample: issues.slice(0, 6).map((i) => ({ identifier: i.identifier, title: i.title, state: i.state?.name, priority: i.priority, hasDescription: Boolean(i.description) })),
-            },
+            state: { task: params.task, count: n, distinctProjects: projects.length, projectNamed: params.project?.name ?? null, sample },
             questions: {
               view: {
                 type: "choice",
-                instructions: "Pick the Linear view that answers the task best. Judge the task wording and how many issues there are.",
+                instructions: "Pick the Linear composition that answers the task. Judge the wording of the task first, then the count and shape of the issues. Examples: 'show NEAT-9' -> issue; 'what's open', 'my issues', 'triage', 'list the bugs' -> list; 'where do we stand', 'how is the team doing', 'standup', 'what's blocked', 'overview' -> board; 'how is <project> going', 'what's left in <project>', 'project status' -> project.",
                 criteria: {
-                  issue: "One issue in full: title, description, properties. The task is about a single issue.",
-                  list: "Several issues as compact rows. The task asks to see, scan, or triage issues and does not ask about progress or status.",
-                  board: "Several issues grouped by status. The task asks where things stand, how work is progressing, what is done or blocked, or for an overview.",
+                  issue: "One issue in full: title, description, properties, comment box. The task names or is about a single issue, or there is exactly one issue.",
+                  list: "Several issues as compact editable rows. The task is to see, scan, pick from, or triage issues; grouping would not help.",
+                  board: "Several issues grouped under headers. The task is about where things stand, progress, what is blocked, an overview, a standup.",
+                  project: "A project header with a progress bar and its issues grouped. The task is about one project as a whole: how it is going, what is left, its status.",
                 },
               },
-              description: { type: "bool", instructions: "Should the view show each issue's description?", criteria: { true: "The task needs the body text to judge the issue.", false: "Titles and properties are enough." } },
-              labels: { type: "bool", instructions: "Should the view show labels?", criteria: { true: "Labels help the task (categories, decisions, bugs).", false: "Labels are noise for this task." } },
-              dates: { type: "bool", instructions: "Should the view show created and done dates?", criteria: { true: "Timing matters for the task.", false: "Timing does not matter." } },
-              assignee: { type: "bool", instructions: "Should the view show the assignee?", criteria: { true: "Who owns each issue matters.", false: "Ownership does not matter for this task." } },
+              groupBy: {
+                type: "choice",
+                instructions: "If the view groups issues, by which property? Examples: 'where do we stand', 'what's done', 'blocked' -> status; 'across projects', 'per project', 'what's left in each project' -> project; 'who owns what', 'per person', 'workload' -> assignee; 'what's urgent', 'by importance', 'triage' -> priority.",
+                criteria: {
+                  status: "The task is about progress, completion, or blockage.",
+                  project: "The task compares or splits work across projects.",
+                  assignee: "The task is about who owns what, workload, or hand-offs.",
+                  priority: "The task is about urgency or importance.",
+                },
+              },
+              sort: {
+                type: "choice",
+                instructions: "Order of the rows within the view or within each group.",
+                criteria: {
+                  priority: "Urgent first. The default for triage, open work, what to do next.",
+                  newest: "Most recently created first. The task is about what came in, what is new, recent activity.",
+                  none: "Keep Linear's order. The task does not care about order.",
+                },
+              },
+              description: { type: "bool", instructions: "Show each issue's description text?", criteria: { true: "The task needs the body to judge or act (review, decide, understand one issue).", false: "Titles and properties are enough (scan, status, overview, triage)." } },
+              labels: { type: "bool", instructions: "Show labels?", criteria: { true: "The task mentions a label or category (bug, decision, design), or triage.", false: "Labels do not help the task." } },
+              dates: { type: "bool", instructions: "Show created and done dates?", criteria: { true: "Timing matters: recent, new, stale, how long, this week, deadlines.", false: "Timing does not matter." } },
+              assignee: { type: "bool", instructions: "Show the assignee?", criteria: { true: "Ownership matters, more than one person is involved, or the task asks who.", false: "One person does everything here, or ownership is beside the point." } },
+              project: { type: "bool", instructions: "Show the project of each issue?", criteria: { true: "Issues span more than one project, or the task mentions projects.", false: "All issues share one project, or the view already groups by project." } },
             },
           });
           const v = answers.view;
           if (v?.type !== "choice") return undefined;
+          const pick = (k) => (answers[k]?.type === "choice" ? answers[k].choice : undefined);
           const yes = (k) => answers[k]?.type === "bool" && answers[k].probability >= 0.5;
-          return { view: n === 1 && v.choice !== "issue" ? "issue" : v.choice, fields: { description: yes("description"), labels: yes("labels"), dates: yes("dates"), assignee: yes("assignee") }, by: "jev", confidence: v.confidence };
+          const view = n === 1 && v.choice !== "project" ? "issue" : v.choice;
+          const groupBy = view === "project" ? (pick("groupBy") === "project" ? "status" : pick("groupBy") ?? "status") : pick("groupBy") ?? "status";
+          return {
+            view, groupBy, sort: pick("sort") ?? "priority",
+            fields: { description: yes("description"), labels: yes("labels"), dates: yes("dates"), assignee: yes("assignee"), project: yes("project") && groupBy !== "project" },
+            by: "jev", confidence: v.confidence,
+          };
         },
         byCount,
-        { timeoutMs: 4000, purpose: "linear-view", ...(signal ? { signal } : {}) },
+        { timeoutMs: 5000, purpose: "linear-view", ...(signal ? { signal } : {}) },
       );
       const who = composition.by === "jev" ? "Jev picked" : "default pick, Jev unavailable";
+      const how = composition.view === "board" || composition.view === "project" ? `, grouped by ${composition.groupBy}` : "";
       return {
-        content: [{ type: "text", text: `Composed a ${composition.view} view of ${n} issue${n === 1 ? "" : "s"} (${who}). The card is the answer; add at most one short line.` }],
+        content: [{ type: "text", text: `Composed a ${composition.view} view of ${n} issue${n === 1 ? "" : "s"}${how} (${who}). The card is the answer; add at most one short line.` }],
         details: { composition },
       };
     },
