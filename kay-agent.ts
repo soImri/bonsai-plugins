@@ -14,7 +14,10 @@
 import { withResolvedAuth } from "@bonsai/plugin-sdk/kay-agent";
 
 const LINEAR_AUTH = { serviceId: "linear.account", schemeId: "linear.mcp-oauth" } as const;
-const GRAPHQL = "https://api.linear.app/graphql";
+// Bonsai's Linear token is minted for Linear's MCP server (api.linear.app/graphql answers 401 to it,
+// measured 2026-10-23), so reads speak MCP JSON-RPC over Streamable HTTP to that server.
+const MCP_URL = "https://mcp.linear.app/mcp";
+const MCP_PROTOCOL = "2025-06-18";
 const META_TTL_MS = 10 * 60 * 1000;
 const ISSUE_LIMIT = 50;
 const DESCRIPTION_CAP = 700;
@@ -37,30 +40,66 @@ type Composition = {
   by: "jev" | "fallback"; confidence?: number;
 };
 
-/* ---------- Linear GraphQL ---------- */
+/* ---------- Linear MCP (JSON-RPC over Streamable HTTP) ---------- */
 class LinearHttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 
-async function gql<T>(token: string, query: string, variables: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(GRAPHQL, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ query, variables }),
-    ...(signal ? { signal } : {}),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new LinearHttpError(res.status, `Linear GraphQL answered ${res.status}: ${text.slice(0, 160)}`);
-  const json = JSON.parse(text) as { data?: T; errors?: { message: string }[] };
-  if (json.errors?.length) throw new Error(`Linear GraphQL: ${json.errors.map((e) => e.message).join("; ")}`);
-  return json.data as T;
+type McpSession = { id?: string; protocol: string; at: number };
+const mcpSessions = new Map<string, McpSession>(); // by token
+let rpcId = 1;
+
+function mcpHeaders(token: string, s?: McpSession): Record<string, string> {
+  return {
+    "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${token}`,
+    ...(s ? { "mcp-protocol-version": s.protocol } : {}), ...(s?.id ? { "mcp-session-id": s.id } : {}),
+  };
 }
 
-const TEAMS_Q = `query { viewer { displayName } teams(first: 50) { nodes { id key name } } }`;
-const STATES_Q = `query($id: String!) { team(id: $id) { states(first: 50) { nodes { name type position } } members(first: 50) { nodes { displayName } } } }`;
-const LABELS_Q = `query($id: String!) { team(id: $id) { labels(first: 100) { nodes { name description isGroup retiredAt } } } issueLabels(first: 100, filter: { team: { null: true } }) { nodes { name description isGroup retiredAt } } }`;
-const LABELS_Q_BARE = `query($id: String!) { team(id: $id) { labels(first: 100) { nodes { name description } } } issueLabels(first: 100, filter: { team: { null: true } }) { nodes { name description } } }`;
-const PROJECTS_Q = `query($id: String!) { team(id: $id) { projects(first: 50) { nodes { name description status { name } lead { displayName } targetDate } } } }`;
-const ISSUE_FIELDS = `identifier title description priority url createdAt completedAt updatedAt state { name type } assignee { displayName } project { name } labels(first: 20) { nodes { name } }`;
-const ISSUES_Q = `query($filter: IssueFilter, $first: Int!) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { ${ISSUE_FIELDS} } } }`;
+/** One JSON-RPC response from a plain JSON or an SSE body. */
+async function readRpc(res: Response, id: number): Promise<any> {
+  const ct = res.headers.get("content-type") ?? "";
+  const body = await res.text();
+  if (!res.ok) throw new LinearHttpError(res.status, `Linear's MCP server answered ${res.status}: ${body.slice(0, 160)}`);
+  if (!body.trim()) return undefined;
+  const pick = (m: any) => (Array.isArray(m) ? m.find((x) => x?.id === id) ?? m[0] : m);
+  if (ct.includes("text/event-stream")) {
+    let last: any;
+    for (const line of body.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      try { const m = pick(JSON.parse(line.slice(5).trim())); if (m && (m.id === id || m.result || m.error)) { last = m; if (m.id === id) break; } } catch { /* keep-alive or partial */ }
+    }
+    return last;
+  }
+  return pick(JSON.parse(body));
+}
+
+async function mcpConnect(token: string, signal?: AbortSignal): Promise<McpSession> {
+  const hit = mcpSessions.get(token);
+  if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
+  const id = rpcId++;
+  const res = await fetch(MCP_URL, { method: "POST", headers: mcpHeaders(token), body: JSON.stringify({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: MCP_PROTOCOL, capabilities: {}, clientInfo: { name: "connector-cards", version: "0.2" } } }), ...(signal ? { signal } : {}) });
+  const msg = await readRpc(res, id);
+  if (msg?.error) throw new Error(`Linear MCP initialize: ${msg.error.message ?? JSON.stringify(msg.error)}`);
+  const session: McpSession = { ...(res.headers.get("mcp-session-id") ? { id: res.headers.get("mcp-session-id")! } : {}), protocol: msg?.result?.protocolVersion ?? MCP_PROTOCOL, at: Date.now() };
+  await fetch(MCP_URL, { method: "POST", headers: mcpHeaders(token, session), body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }), ...(signal ? { signal } : {}) }).catch(() => undefined);
+  mcpSessions.set(token, session);
+  return session;
+}
+
+async function mcpCall<T = any>(token: string, name: string, args: Record<string, unknown>, signal?: AbortSignal, retry = true): Promise<T> {
+  const session = await mcpConnect(token, signal);
+  const id = rpcId++;
+  const res = await fetch(MCP_URL, { method: "POST", headers: mcpHeaders(token, session), body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }), ...(signal ? { signal } : {}) });
+  if ((res.status === 404 || res.status === 400) && session.id && retry) { mcpSessions.delete(token); return mcpCall(token, name, args, signal, false); }
+  const msg = await readRpc(res, id);
+  if (!msg) throw new Error(`Linear MCP ${name}: empty response`);
+  if (msg.error) throw new Error(`Linear MCP ${name}: ${msg.error.message ?? JSON.stringify(msg.error)}`);
+  const content: any[] = msg.result?.content ?? [];
+  const text = content.find((c) => c?.type === "text")?.text ?? "";
+  if (msg.result?.isError) throw new Error(`Linear MCP ${name}: ${text.slice(0, 200) || "tool error"}`);
+  try { return JSON.parse(text) as T; } catch { return text as unknown as T; }
+}
+
+const asList = (r: any, key: string): any[] => (Array.isArray(r) ? r : Array.isArray(r?.[key]) ? r[key] : Array.isArray(r?.nodes) ? r.nodes : []);
 
 type TeamRef = { id: string; key: string; name: string };
 let teamsCache: { at: number; viewer: string; teams: TeamRef[] } | undefined;
@@ -68,8 +107,10 @@ const metaCache = new Map<string, TeamMeta>();
 
 async function readTeams(token: string, signal?: AbortSignal) {
   if (teamsCache && Date.now() - teamsCache.at < META_TTL_MS) return teamsCache;
-  const d = await gql<{ viewer: { displayName: string }; teams: { nodes: TeamRef[] } }>(token, TEAMS_Q, {}, signal);
-  teamsCache = { at: Date.now(), viewer: d.viewer.displayName, teams: d.teams.nodes };
+  const [t, me] = await Promise.all([mcpCall(token, "list_teams", { limit: 50 }, signal), mcpCall(token, "get_user", { id: "me" }, signal).catch(() => undefined)]);
+  const teams: TeamRef[] = asList(t, "teams").map((x: any) => ({ id: x.id, key: x.key ?? x.identifier ?? String(x.name ?? "").toUpperCase(), name: x.name ?? x.key }));
+  const viewer = (me as any)?.displayName ?? (me as any)?.name ?? "";
+  teamsCache = { at: Date.now(), viewer, teams };
   return teamsCache;
 }
 
@@ -88,18 +129,23 @@ async function readMeta(token: string, team: TeamRef, viewer: string, dataDir: s
   if (hit && Date.now() - hit.at < META_TTL_MS) return hit;
   const disk = hit ?? (await readDisk(dataDir, team.key));
   if (disk) { metaCache.set(team.key, disk); if (Date.now() - disk.at < META_TTL_MS) return disk; }
-  const vars = { id: team.id };
-  const labelsQ = gql<any>(token, LABELS_Q, vars, signal).catch(() => gql<any>(token, LABELS_Q_BARE, vars, signal));
-  const [s, l, p] = await Promise.all([gql<any>(token, STATES_Q, vars, signal), labelsQ, gql<any>(token, PROJECTS_Q, vars, signal)]);
-  const labelNodes = [...(l.team?.labels?.nodes ?? []), ...(l.issueLabels?.nodes ?? [])].filter((x: any) => !x.isGroup && !x.retiredAt);
+  const t = team.name;
+  const [s, l, p, u] = await Promise.all([
+    mcpCall(token, "list_issue_statuses", { team: t }, signal),
+    mcpCall(token, "list_issue_labels", { team: t, limit: 100 }, signal),
+    mcpCall(token, "list_projects", { team: t, limit: 50 }, signal),
+    mcpCall(token, "list_users", { team: t, limit: 100 }, signal),
+  ]);
+  const TYPE_ORDER = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"];
+  const states: State[] = asList(s, "statuses").map((x: any, i: number) => ({ name: x.name, type: x.type, position: typeof x.position === "number" ? x.position : TYPE_ORDER.indexOf(x.type) * 100 + i })).filter((x: State) => x.type !== "duplicate").sort((a: State, b: State) => (a.position ?? 0) - (b.position ?? 0));
   const seen = new Set<string>();
-  const labels: Label[] = labelNodes.filter((x: any) => (seen.has(x.name) ? false : (seen.add(x.name), true))).map((x: any) => ({ name: x.name, ...(x.description ? { description: x.description } : {}) }));
+  const labels: Label[] = asList(l, "labels").filter((x: any) => !x.isGroup && !x.retiredAt && !x.archivedAt).filter((x: any) => (seen.has(x.name) ? false : (seen.add(x.name), true))).map((x: any) => ({ name: x.name, ...(x.description ? { description: x.description } : {}) }));
   const meta: TeamMeta = {
     id: team.id, key: team.key, name: team.name, viewer, at: Date.now(),
-    states: (s.team?.states?.nodes ?? []).sort((a: State, b: State) => (a.position ?? 0) - (b.position ?? 0)).map((x: any) => ({ name: x.name, type: x.type, position: x.position })),
-    members: (s.team?.members?.nodes ?? []).map((m: any) => m.displayName).filter(Boolean),
+    states,
+    members: asList(u, "users").filter((m: any) => m.isActive !== false).map((m: any) => m.displayName ?? m.name).filter(Boolean),
     labels,
-    projects: (p.team?.projects?.nodes ?? []).map((x: any) => ({ name: x.name, ...(x.description ? { summary: String(x.description).slice(0, 240) } : {}), ...(x.lead?.displayName ? { lead: x.lead.displayName } : {}), ...(x.targetDate ? { targetDate: x.targetDate } : {}), ...(x.status?.name ? { status: x.status.name } : {}) })),
+    projects: asList(p, "projects").map((x: any) => ({ name: x.name, ...(x.summary || x.description ? { summary: String(x.summary || x.description).slice(0, 240) } : {}), ...(x.lead?.displayName || x.lead?.name || typeof x.lead === "string" ? { lead: x.lead?.displayName ?? x.lead?.name ?? x.lead } : {}), ...(x.targetDate ? { targetDate: x.targetDate } : {}), ...(x.status?.name || x.state ? { status: x.status?.name ?? x.state } : {}) })),
   };
   metaCache.set(team.key, meta);
   void writeDisk(dataDir, team.key, meta);
@@ -117,27 +163,36 @@ async function writeDisk(dataDir: string | undefined, key: string, meta: TeamMet
 
 const optionsOf = (m: TeamMeta): Options => ({ states: m.states.map(({ name, type }) => ({ name, type })), projects: m.projects.map((p) => p.name), labels: m.labels.map((l) => l.name), members: m.members });
 
+const ISSUE_FIELDS = ["id", "title", "description", "priority", "url", "createdAt", "updatedAt", "completedAt", "status", "statusType", "labels", "assignee", "project", "team"];
+
+/** Linear's MCP issue shape → the card's. `id` is the identifier (NEAT-11); priority may be {value,name} or a number. */
 function normalizeIssue(n: any): Issue {
   const desc = typeof n.description === "string" ? n.description : "";
+  const pr = typeof n.priority === "object" && n.priority ? n.priority.value : n.priority;
+  const assignee = typeof n.assignee === "string" ? n.assignee : n.assignee?.displayName ?? n.assignee?.name;
+  const project = typeof n.project === "string" ? n.project : n.project?.name;
+  const labels: string[] = Array.isArray(n.labels) ? n.labels.map((l: any) => (typeof l === "string" ? l : l?.name)).filter(Boolean) : [];
   return {
-    identifier: n.identifier, title: n.title, url: n.url,
+    identifier: n.identifier ?? n.id, title: n.title ?? "", ...(n.url ? { url: n.url } : {}),
     ...(desc ? { description: desc.length > DESCRIPTION_CAP ? `${desc.slice(0, DESCRIPTION_CAP)}…` : desc } : {}),
-    state: { name: n.state?.name ?? "Unknown", type: n.state?.type ?? "unstarted" }, priority: n.priority ?? 0,
-    ...(n.assignee?.displayName ? { assignee: n.assignee.displayName } : {}), ...(n.project?.name ? { project: n.project.name } : {}),
-    labels: (n.labels?.nodes ?? []).map((l: any) => l.name), createdAt: n.createdAt, updatedAt: n.updatedAt, ...(n.completedAt ? { completedAt: n.completedAt } : {}),
+    state: { name: n.status ?? n.state?.name ?? "Unknown", type: n.statusType ?? n.state?.type ?? "unstarted" }, priority: typeof pr === "number" ? pr : 0,
+    ...(assignee ? { assignee } : {}), ...(project ? { project } : {}),
+    labels, ...(n.createdAt ? { createdAt: n.createdAt } : {}), ...(n.updatedAt ? { updatedAt: n.updatedAt } : {}), ...(n.completedAt ? { completedAt: n.completedAt } : {}),
   };
 }
 
 async function readIssues(token: string, team: TeamRef, p: { identifiers?: string[]; query?: string; project?: string; assignee?: string; limit?: number }, signal?: AbortSignal): Promise<Issue[]> {
-  const and: Record<string, unknown>[] = [];
-  const ids = (p.identifiers ?? []).map((s) => s.toUpperCase().match(/^([A-Z][A-Z0-9]{1,9})-(\d+)$/)).filter(Boolean) as RegExpMatchArray[];
-  if (ids.length) and.push({ or: ids.map((m) => ({ team: { key: { eq: m[1] } }, number: { eq: Number(m[2]) } })) });
-  else and.push({ team: { id: { eq: team.id } } });
-  if (p.query) and.push({ or: [{ title: { containsIgnoreCase: p.query } }, { description: { containsIgnoreCase: p.query } }] });
-  if (p.project) and.push({ project: { name: { containsIgnoreCase: p.project } } });
-  if (p.assignee) and.push(p.assignee === "me" ? { assignee: { isMe: { eq: true } } } : { assignee: { displayName: { containsIgnoreCase: p.assignee } } });
-  const d = await gql<{ issues: { nodes: any[] } }>(token, ISSUES_Q, { filter: { and }, first: Math.min(Math.max(p.limit ?? ISSUE_LIMIT, 1), 100) }, signal);
-  return d.issues.nodes.map(normalizeIssue);
+  const ids = (p.identifiers ?? []).map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z][A-Z0-9]{1,9}-\d+$/.test(s));
+  if (ids.length) {
+    const got = await Promise.all(ids.map((id) => mcpCall(token, "get_issue", { id, fields: ISSUE_FIELDS }, signal).catch(() => undefined)));
+    return got.filter((g) => g && (g as any).id).map(normalizeIssue);
+  }
+  const args: Record<string, unknown> = { team: team.name, limit: Math.min(Math.max(p.limit ?? ISSUE_LIMIT, 1), 100), orderBy: "updatedAt", fields: ISSUE_FIELDS };
+  if (p.query) args.query = p.query;
+  if (p.project) args.project = p.project;
+  if (p.assignee) args.assignee = p.assignee;
+  const r = await mcpCall(token, "list_issues", args, signal);
+  return asList(r, "issues").map(normalizeIssue);
 }
 
 const SCOPE_TYPES: Record<Scope, string[] | null> = { open: ["triage", "backlog", "unstarted", "started"], active: ["started"], done: ["completed"], all: null };
@@ -179,7 +234,7 @@ const ms = (from: number) => `${Date.now() - from} ms`;
 function failure(err: unknown, context: string) {
   const e = err as Error & { status?: number };
   const why = e instanceof LinearHttpError
-    ? (e.status === 401 || e.status === 403 ? `Linear rejected Bonsai's Linear token on the GraphQL API (HTTP ${e.status}). The token is scoped to Linear's MCP server, so reads must go through linear:// for now.` : e.message)
+    ? (e.status === 401 || e.status === 403 ? `Linear's MCP server rejected Bonsai's Linear token (HTTP ${e.status}). Reconnect Linear (service_connect linear.account) and try again.` : e.message)
     : (e?.name === "AbortError" ? "The call was cancelled." : (e?.message ?? String(err)));
   return text(`Could not ${context}: ${why}`, { error: why });
 }
@@ -298,7 +353,7 @@ export function activate(api: any) {
       const t0 = Date.now();
       try {
         const { meta } = await context(auth.accessToken, undefined, params.identifier, ctx, signal);
-        const [issue] = await readIssues(auth.accessToken, { id: meta.id, key: meta.key, name: meta.name }, { identifiers: [params.identifier], limit: 1 }, signal);
+        const [issue] = await readIssues(auth.accessToken, { id: meta.id, key: meta.key, name: meta.name }, { identifiers: [params.identifier] }, signal);
         if (!issue) return text(`No issue ${params.identifier} is visible to Bonsai's Linear account. Say so in one line.`, { error: `No issue ${params.identifier}.` });
         const full = { ...issue, options: optionsOf(meta), ...(params.commentDraft ? { commentDraft: params.commentDraft } : {}) };
         return text(`Showing ${issue.identifier} as a Linear issue card (Linear ${ms(t0)}). The card is the answer: reply with one short line or nothing.`, { kind: "issue", issue: full, timing: { linear: ms(t0) } });
