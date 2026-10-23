@@ -16,11 +16,11 @@ Four tools, any connector. One call draws the card: the plugin picks the connect
 
 Pass `connector` ("linear", "gcal") only when the ask is ambiguous. A calendar ask about one specific date goes in `filters: { date: "YYYY-MM-DD" }`. A free-time slot click sends `Draft an event on <date> at <time> for <N> minutes`: answer it with `cards_draft { task, title: "New event", fields: { start, end } }`. For a calendar draft, put what the ask states into `fields`: `start` and `end` as the person's local date-time (`2026-10-24T15:00`), `attendees` as emails, `location`, `allDay`. Leave out what the ask does not say; Jev and the card fill the rest.
 
-After the call returns, reply with at most one short line, or nothing. Never restate the card's fields. Never rebuild a card as prose or a generic form.
+After the call returns, reply with nothing. Not a summary, not what the card shows, not what to press next: the card is the whole answer and the person navigates inside it (ranges, views, rows expand in place). The only exception is an error line when the tool reports one. Never rebuild a card as prose or a generic form.
 
 ## Messages the cards send back
 
-Each one is exactly one `cards_apply { message }` call with the message verbatim, then one short line (or nothing). Never call an MCP or URI yourself for these; the plugin parses, writes, and redraws the card from the app's truth. Bonsai may ask you to approve the write; that is expected.
+Each one is exactly one `cards_apply { message }` call with the message verbatim, then nothing. Never call an MCP or URI yourself for these; the plugin parses, writes, and redraws the card from the app's truth. Bonsai may ask you to approve the write; that is expected.
 
 - Linear: `Save NEAT-10: status → In Progress; labels → A, B` (one line per issue), `Comment on NEAT-10:` + body, `Create in NEAT: <title>` + a properties line and an optional `Description:` block.
 - Google Calendar: `Save event #a1b2c3: start → 2026-10-24 15:00; end → …`, `Create event: <title>` + a properties line and an optional `Notes:` block, `RSVP #a1b2c3: yes|no|maybe`, `Delete event #a1b2c3`.

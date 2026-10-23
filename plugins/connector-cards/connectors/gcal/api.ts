@@ -68,7 +68,7 @@ export function normalizeEvent(e: any, cal: Calendar): Event {
 
 /** Events across the selected calendars in [from, to), sorted by start; remembers keys for later. */
 export async function listEvents(token: string, cache: DiskCache, calendars: Calendar[], from: Date, to: Date, query: string | undefined, signal?: AbortSignal): Promise<Event[]> {
-  const q = `singleEvents=true&orderBy=startTime&maxResults=100&timeMin=${encodeURIComponent(from.toISOString())}&timeMax=${encodeURIComponent(to.toISOString())}${query ? `&q=${encodeURIComponent(query)}` : ""}`;
+  const q = `singleEvents=true&orderBy=startTime&maxResults=250&timeMin=${encodeURIComponent(from.toISOString())}&timeMax=${encodeURIComponent(to.toISOString())}${query ? `&q=${encodeURIComponent(query)}` : ""}`;
   const per = await Promise.all(calendars.map(async (cal) => { try { const r = await gapi(token, "GET", `/calendars/${encodeURIComponent(cal.id)}/events?${q}`, undefined, signal); return (r.items ?? []).filter((e: any) => e.status !== "cancelled").map((e: any) => normalizeEvent(e, cal)); } catch { return [] as Event[]; } }));
   const events = per.flat().sort((a, b) => a.start.localeCompare(b.start));
   await rememberKeys(cache, events);

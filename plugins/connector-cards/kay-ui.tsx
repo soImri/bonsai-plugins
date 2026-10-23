@@ -327,18 +327,31 @@ function IssueRow({ issue, value, onChange, options, fields, onOpen }) {
       {fields.dates !== false && issue.createdAt ? <span style={{ ...muted, fontSize: 12, flexShrink: 0, width: 44, textAlign: "right" }}>{dayShort(issue.createdAt)}</span> : null}
     </div>;
 }
+var SCOPE_TYPES = { open: ["triage", "backlog", "unstarted", "started"], active: ["started"], done: ["completed"], all: null };
+var SCOPE_LABEL = { open: "Open", active: "In progress", done: "Done", all: "All" };
+var Tab = ({ on, children, onClick }) => <button type="button" onClick={onClick} style={{ ...bare, width: "auto", padding: "3px 8px", borderRadius: 6, fontSize: 12, fontWeight: on ? 600 : 400, background: on ? v("bg-subtle") : "transparent", color: on ? v("text-primary") : v("text-secondary"), cursor: "pointer" }}>{children}</button>;
 function ComposedView({ ctx, note }) {
   const d = ctx.details ?? {};
-  const issues = Array.isArray(d.issues) ? d.issues : [];
+  const all = Array.isArray(d.allIssues) && d.allIssues.length ? d.allIssues : Array.isArray(d.issues) ? d.issues : [];
   const options = d.options;
-  const comp = useMemo(() => {
-    const n = issues.length;
-    const fb = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" };
+  const jevComp = useMemo(() => {
+    const n = (d.issues ?? all).length;
+    const fb = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", scope: "open", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" };
     const c = d.composition;
     return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...c.fields ?? {} } } : fb;
   }, [d]);
+  const [view, setView] = useState2(jevComp.view);
+  const [scope, setScope] = useState2(jevComp.scope ?? "open");
+  const [groupBy, setGroupBy] = useState2(jevComp.groupBy ?? "status");
+  const [openId, setOpenId] = useState2(null);
+  useEffect2(() => {
+    setView(jevComp.view);
+    setScope(jevComp.scope ?? "open");
+    setGroupBy(jevComp.groupBy ?? "status");
+    setOpenId(null);
+  }, [jevComp]);
   const states = options?.states?.length ? options.states : DEFAULT_STATES;
-  const seed = useMemo(() => Object.fromEntries(issues.map((i) => [i.identifier, propsOf(i, states)])), [d]);
+  const seed = useMemo(() => Object.fromEntries(all.map((i) => [i.identifier, propsOf(i, states)])), [d]);
   const [saved, setSaved] = useState2(seed);
   const [cur, setCur] = useState2(seed);
   const [saving, setSaving] = useState2(false);
@@ -349,15 +362,17 @@ function ComposedView({ ctx, note }) {
       setCur(seed);
     }
   }, [seed]);
-  if (!issues.length) return <ErrorCard message={`No ${comp.scope && comp.scope !== "all" ? `${comp.scope} ` : ""}issues match.`} />;
+  const stateOf = (i) => cur[i.identifier]?.state ?? i.state;
+  const issues = all.filter((i) => SCOPE_TYPES[scope] === null || SCOPE_TYPES[scope].includes(stateOf(i).type ?? ""));
   const applied = Array.isArray(d.applied) ? d.applied : void 0;
-  const savedNote = note ?? (applied ? `Saved \xB7 ${applied.join(" \xB7 ")}${d.timing?.linear ? ` \xB7 Linear ${d.timing.linear}` : ""}` : void 0);
-  if (comp.view === "issue") {
-    const one = { ...issues[0], options: issues[0].options ?? options };
+  const savedNote = note ?? (applied ? `Saved \xB7 ${applied.join(" \xB7 ")}` : void 0);
+  const comp = jevComp;
+  if (view === "issue" && all.length === 1) {
+    const one = { ...all[0], options: all[0].options ?? options };
     if (comp.fields.description === false) delete one.description;
     return <IssueCard ctx={{ ...ctx, details: { ...d, kind: "issue", issue: one } }} note={savedNote} />;
   }
-  const changedIds = issues.filter((i) => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map((i) => i.identifier);
+  const changedIds = all.filter((i) => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map((i) => i.identifier);
   const changes = changedIds.map((id) => saveLine(id, diff(saved[id], cur[id])));
   dirty.current = changes.length > 0;
   async function save() {
@@ -367,13 +382,13 @@ function ComposedView({ ctx, note }) {
     setSaved(next);
     setSaving(false);
   }
-  const open = (id) => {
-    void ctx.send(`Show ${id}`);
-  };
-  const team = d.team ?? issues[0]?.identifier.split("-")[0] ?? "";
+  const open = (id) => setOpenId((o) => o === id ? null : id);
+  const team = d.team ?? all[0]?.identifier.split("-")[0] ?? "";
   const sorted = [...issues].sort((a, b) => comp.sort === "newest" ? (b.createdAt ?? "").localeCompare(a.createdAt ?? "") : comp.sort === "priority" ? (a.priority || 9) - (b.priority || 9) : 0);
-  const gb = comp.view === "board" || comp.view === "project" ? comp.groupBy ?? "status" : void 0;
-  const stateOf = (i) => cur[i.identifier]?.state ?? i.state;
+  const projects = [...new Set(all.map((i) => i.project).filter(Boolean))];
+  const projectInfo = d.project ?? (projects.length === 1 ? (d.projects ?? []).find((p) => p.name === projects[0]) ?? { name: projects[0] } : void 0);
+  const effectiveView = view === "project" && !projectInfo ? "board" : view === "issue" ? "list" : view;
+  const gb = effectiveView === "board" || effectiveView === "project" ? groupBy : void 0;
   const keyFor = (i) => gb === "status" ? stateOf(i).name : gb === "project" ? cur[i.identifier]?.project ?? "No project" : gb === "assignee" ? cur[i.identifier]?.assignee ?? "Unassigned" : gb === "priority" ? PRIORITIES[cur[i.identifier]?.priority ?? 0] : "all";
   const leadFor = (sample) => gb === "status" ? <StatusGlyph type={stateOf(sample).type} /> : gb === "project" ? <ProjectGlyph /> : gb === "assignee" ? <UserGlyph /> : gb === "priority" ? <PriorityGlyph p={cur[sample.identifier]?.priority ?? 0} /> : null;
   const groupsMap = /* @__PURE__ */ new Map();
@@ -382,31 +397,44 @@ function ComposedView({ ctx, note }) {
     groupsMap.set(k, [...groupsMap.get(k) ?? [], i]);
   }
   const groups = [...groupsMap.entries()].sort((a, b) => gb === "status" ? STATE_ORDER.indexOf(stateOf(a[1][0]).type ?? "") - STATE_ORDER.indexOf(stateOf(b[1][0]).type ?? "") : gb === "priority" ? PRIORITIES.indexOf(a[0]) - PRIORITIES.indexOf(b[0]) : a[0].localeCompare(b[0]));
-  const done = issues.filter((i) => stateOf(i).type === "completed").length;
-  const inProgress = issues.filter((i) => stateOf(i).type === "started").length;
-  const viewName = comp.view === "list" ? "List" : comp.view === "board" ? `Board by ${gb}` : "Project";
-  const t = d.timing;
-  const caption = savedNote ?? `${viewName} view \xB7 ${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.linear ? ` \xB7 Linear ${t.linear}` : ""}${t?.jev ? ` \xB7 Jev ${t.jev}` : ""}`;
+  const projIssues = effectiveView === "project" && projectInfo ? all.filter((i) => i.project === projectInfo.name) : issues;
+  const done = projIssues.filter((i) => stateOf(i).type === "completed").length;
+  const inProgress = projIssues.filter((i) => stateOf(i).type === "started").length;
+  const row_ = (i) => <div key={i.identifier}>
+      <IssueRow issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={(p) => setCur((c) => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} />
+      {openId === i.identifier ? <div style={{ margin: "2px 0 8px 30px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: { ...i, options: i.options ?? options } } }} /></div> : null}
+    </div>;
+  const switcher = <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+      <span style={{ display: "inline-flex", gap: 2 }}>
+        <Tab on={effectiveView === "list"} onClick={() => setView("list")}>List</Tab>
+        <Tab on={effectiveView === "board"} onClick={() => setView("board")}>Board</Tab>
+        {projectInfo ? <Tab on={effectiveView === "project"} onClick={() => setView("project")}>Project</Tab> : null}
+        {gb ? <Picker items={["status", "project", "assignee", "priority"]} value={groupBy} onPick={(g) => setGroupBy(g)} label="Group" lead={() => null} keyOf={(g) => g} labelOf={(g) => `by ${g}`} /> : null}
+      </span>
+      <span style={{ display: "inline-flex", gap: 2 }}>
+        {["open", "active", "done", "all"].map((sc) => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
+      </span>
+    </div>;
+  const emptyNote = !issues.length ? <div style={{ ...muted, padding: "8px 8px 2px" }}>No {SCOPE_LABEL[scope].toLowerCase()} issues.</div> : null;
   return <section style={card}>
       <div style={{ ...pad, gap: 8 }}>
-        {comp.view === "project" ? <>
+        {effectiveView === "project" && projectInfo ? <>
             <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>›</span><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ProjectGlyph />Project</span></div>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{d.project?.name ?? issues[0]?.project ?? "Project"}</h2>
-            {d.project?.description ? <div style={{ ...muted, fontSize: 13 }}>{d.project.description}</div> : null}
-            <div style={{ ...row, fontSize: 12, ...muted }}>{d.project?.lead ? <span>Lead {d.project.lead}</span> : null}{d.project?.targetDate ? <span>· Target {dayShort(d.project.targetDate)}</span> : null}<span>· {inProgress} in progress</span></div>
-            <ProgressBar done={done} total={issues.length} />
-          </> : <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
-            <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
-          </div>}
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{projectInfo.name}</h2>
+            {projectInfo.description ? <div style={{ ...muted, fontSize: 13 }}>{projectInfo.description}</div> : null}
+            <div style={{ ...row, fontSize: 12, ...muted }}>{projectInfo.lead ? <span>Lead {projectInfo.lead}</span> : null}{projectInfo.targetDate ? <span>· Target {dayShort(projectInfo.targetDate)}</span> : null}<span>· {inProgress} in progress</span></div>
+            <ProgressBar done={done} total={projIssues.length} />
+          </> : <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span>{savedNote ? <span>· {savedNote}</span> : null}</div>}
+        {switcher}
         <div style={{ display: "flex", flexDirection: "column", pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}>
+          {emptyNote}
           {groups.map(([key, items], gi) => <div key={key} style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: gi === 0 ? 2 : 10 }}>
               {gb ? <GroupHeader lead={leadFor(items[0])} label={key} count={items.length} /> : null}
-              {items.map((i) => <IssueRow key={i.identifier} issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={(p) => setCur((c) => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} />)}
+              {items.map(row_)}
             </div>)}
         </div>
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={comp.view === "project" ? caption : void 0} />
+      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} />
     </section>;
 }
 function LinearUi({ ctx, note }) {
@@ -453,6 +481,7 @@ start \u2192 ${d.start}; end \u2192 ${d.end}; all day \u2192 ${d.allDay ? "yes" 
 
 Notes:
 ${d.notes.trim()}` : ""}`;
+var Tab2 = ({ on, children, onClick }) => <button type="button" onClick={onClick} style={{ ...bare, width: "auto", padding: "3px 8px", borderRadius: 6, fontSize: 12, fontWeight: on ? 600 : 400, background: on ? v("bg-subtle") : "transparent", color: on ? v("text-primary") : v("text-secondary"), cursor: "pointer" }}>{children}</button>;
 var Dot = ({ color }) => <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: color ?? DEFAULT_COLOR, flexShrink: 0 }} />;
 var Line = ({ glyph, children }) => <div style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13 }}><span style={{ ...muted, display: "inline-flex", width: 16, justifyContent: "center", marginTop: 3 }}>{glyph}</span><div style={{ flex: 1, minWidth: 0 }}>{children}</div></div>;
 var inputStyle = { ...bare, width: "auto", border: `1px solid ${v("border")}`, borderRadius: 6, padding: "3px 6px", fontSize: 13, colorScheme: "light dark" };
@@ -552,56 +581,55 @@ var addDays = (ymd, n) => {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
-function MonthGrid({ ctx, caption }) {
+function MonthGrid({ ctx, caption, month, events, onPrev, onNext, canPrev, canNext }) {
   const d = ctx.details ?? {};
   const tz = d.timeZone ?? "UTC";
-  const m = d.month ?? {};
-  const events = Array.isArray(d.events) ? d.events : [];
+  const m = month;
   const today = (d.now ?? wallOf((/* @__PURE__ */ new Date()).toISOString(), tz)).slice(0, 10);
+  const [selected, setSelected] = useState3(null);
+  const [openKey, setOpenKey] = useState3(null);
+  useEffect3(() => {
+    setSelected(null);
+    setOpenKey(null);
+  }, [m.first]);
   const byDay = /* @__PURE__ */ new Map();
   for (const e of events) {
-    const s = wallOf(e.start, tz).slice(0, 10);
+    const st = wallOf(e.start, tz).slice(0, 10);
     const endExclusive = e.allDay ? e.end : wallOf(e.end, tz).slice(0, 10);
-    for (let day = s; day < (e.allDay ? endExclusive : addDays(endExclusive, 1)) && day <= addDays(s, 31); day = addDays(day, 1)) byDay.set(day, [...byDay.get(day) ?? [], e]);
+    for (let day = st; day < (e.allDay ? endExclusive : addDays(endExclusive, 1)) && day <= addDays(st, 31); day = addDays(day, 1)) byDay.set(day, [...byDay.get(day) ?? [], e]);
   }
   const cells = [];
   for (let day = m.gridStart; day && day < m.gridEnd && cells.length < 42; day = addDays(day, 1)) cells.push(day);
   const inMonth = (day) => day >= m.first && day < m.next;
   const cell = { minHeight: 64, padding: "4px 4px 6px", borderTop: `1px solid ${v("border")}`, borderLeft: `1px solid ${v("border")}`, display: "flex", flexDirection: "column", gap: 2, minWidth: 0 };
-  return <section style={{ ...card, maxWidth: 760 }}>
-      <div style={{ ...pad, gap: 6, paddingBottom: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>{m.label ?? "Month"} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
-            <Button variant="secondary" size="sm" onClick={() => {
-    void ctx.send(`Show me ${m.label === d.now?.slice(0, 7) ? "last" : "the previous"} month on my calendar`);
-  }} aria-label="Previous month">‹</Button>
-            <Button variant="secondary" size="sm" onClick={() => {
-    void ctx.send("Show me next month on my calendar");
-  }} aria-label="Next month">›</Button>
-          </span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", fontSize: 10, fontWeight: 600, letterSpacing: 0.5, ...muted, textAlign: "center" }}>{["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((w) => <div key={w} style={{ padding: "2px 0 4px" }}>{w}</div>)}</div>
+  const pick = (day) => {
+    setSelected((s) => s === day ? null : day);
+    setOpenKey(null);
+  };
+  const dayItems = selected ? byDay.get(selected) ?? [] : [];
+  return <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 15, fontWeight: 600 }}>{m.label} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+          <Button variant="secondary" size="sm" disabled={!canPrev} onClick={onPrev} aria-label="Previous month">‹</Button>
+          <Button variant="secondary" size="sm" disabled={!canNext} onClick={onNext} aria-label="Next month">›</Button>
+        </span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderRight: `1px solid ${v("border")}`, borderBottom: `1px solid ${v("border")}`, margin: "0 20px 16px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", fontSize: 10, fontWeight: 600, letterSpacing: 0.5, ...muted, textAlign: "center" }}>{["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((w) => <div key={w} style={{ padding: "2px 0 4px" }}>{w}</div>)}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderRight: `1px solid ${v("border")}`, borderBottom: `1px solid ${v("border")}` }}>
         {cells.map((day) => {
     const items = byDay.get(day) ?? [];
     const shown = items.slice(0, 3);
-    return <div key={day} style={{ ...cell, opacity: inMonth(day) ? 1 : 0.45 }}>
-              <button
-      type="button"
-      onClick={() => {
-        void ctx.send(`What's on my calendar on ${day}?`);
-      }}
-      title={`Open ${day}`}
-      style={{ ...bare, width: 24, height: 24, borderRadius: 12, alignSelf: "flex-start", fontSize: 12, fontWeight: day === today ? 700 : 500, background: day === today ? v("accent") : "transparent", color: day === today ? "white" : v("text-primary"), cursor: "pointer", textAlign: "center" }}
-    >{Number(day.slice(8, 10))}</button>
+    return <div key={day} onClick={() => pick(day)} style={{ ...cell, opacity: inMonth(day) ? 1 : 0.45, cursor: "pointer", background: selected === day ? v("bg-subtle") : "transparent" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 12, alignSelf: "flex-start", fontSize: 12, fontWeight: day === today ? 700 : 500, background: day === today ? v("accent") : "transparent", color: day === today ? "white" : v("text-primary") }}>{Number(day.slice(8, 10))}</span>
               {shown.map((e) => <button
       key={e.key}
       type="button"
-      onClick={() => {
-        void ctx.send(`Show event ${e.key}`);
+      onClick={(ev) => {
+        ev.stopPropagation();
+        setSelected(day);
+        setOpenKey(e.key);
       }}
       title={`${e.title} \xB7 ${timeRange(e, tz)}`}
       {...hoverable}
@@ -611,13 +639,15 @@ function MonthGrid({ ctx, caption }) {
                   {!e.allDay ? <span style={{ ...muted, flexShrink: 0 }}>{fmtTime(wallOf(e.start, tz)).replace(":00", "").replace(" ", "").toLowerCase()}</span> : null}
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
                 </button>)}
-              {items.length > 3 ? <button type="button" onClick={() => {
-      void ctx.send(`What's on my calendar on ${day}?`);
-    }} style={{ ...bare, width: "auto", fontSize: 11, ...muted, cursor: "pointer", padding: "0 4px", textAlign: "left" }}>+{items.length - 3} more</button> : null}
+              {items.length > 3 ? <span style={{ fontSize: 11, ...muted, padding: "0 4px" }}>+{items.length - 3} more</span> : null}
             </div>;
   })}
       </div>
-    </section>;
+      {selected ? <div style={{ display: "flex", flexDirection: "column", gap: 2, paddingTop: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, padding: "2px 8px" }}>{fmtDay(selected, true)} <span style={{ ...muted, fontWeight: 400 }}>{dayItems.length ? `${dayItems.length} ${dayItems.length === 1 ? "event" : "events"}` : "nothing scheduled"}</span></div>
+          {dayItems.map((e) => <EventRow key={e.key} e={e} tz={tz} open={openKey === e.key} onToggle={() => setOpenKey((k) => k === e.key ? null : e.key)} ctx={ctx} fields={{ attendees: true, location: true, description: true, past: true }} />)}
+        </div> : null}
+    </>;
 }
 var GRID = { start: 8, end: 19, rowPx: 34 };
 var minsOf = (w) => {
@@ -626,7 +656,7 @@ var minsOf = (w) => {
 };
 var wallAt = (date, mins) => `${date} ${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
 var hourLabel = (h) => `${(h + 11) % 12 + 1} ${h >= 12 ? "PM" : "AM"}`;
-function FreeTime({ ctx, caption }) {
+function FreeTime({ ctx, caption, chips }) {
   const d = ctx.details ?? {};
   const f = d.free ?? {};
   const days = Array.isArray(f.days) ? f.days : [];
@@ -665,6 +695,7 @@ function FreeTime({ ctx, caption }) {
   if (drafting && draftDetails) return <NewEventCard ctx={{ ...ctx, details: draftDetails }} onBack={() => setDrafting(false)} />;
   return <section style={{ ...card, maxWidth: 760 }}>
       <div style={{ ...pad, gap: 10, paddingBottom: 10 }}>
+        {chips}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <span style={{ fontSize: 15, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 10 }}>Find a time
             <Picker items={[15, 30, 45, 60, 90]} value={duration} onPick={(m) => {
@@ -714,54 +745,139 @@ function FreeTime({ ctx, caption }) {
       </div>
     </section>;
 }
+function EventRow({ e, tz, open, onToggle, ctx, fields }) {
+  return <div>
+      <button
+    type="button"
+    onClick={onToggle}
+    title={open ? "Collapse" : `Open ${e.title}`}
+    {...hoverable}
+    style={{ ...bare, display: "flex", alignItems: "center", gap: 10, padding: "5px 8px", borderRadius: 8, cursor: "pointer", textAlign: "left", background: open ? v("bg-subtle") : "transparent" }}
+  >
+        <Dot color={e.color} />
+        <span style={{ ...muted, fontSize: 12, width: 118, flexShrink: 0 }}>{timeRange(e, tz)}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, ...e.myResponse === "declined" ? { textDecoration: "line-through", ...muted } : {} }}>{e.title}</span>
+        {fields.location && e.location ? <span style={{ ...muted, fontSize: 12, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.location}</span> : null}
+        {fields.attendees && e.attendees.length ? <span style={{ ...muted, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 3 }}><UserGlyph />{e.attendees.length}</span> : null}
+        {e.myResponse === "needsAction" ? <span style={{ fontSize: 10, fontWeight: 600, color: v("warning") }}>RSVP</span> : null}
+        {e.meet ? <span style={{ ...muted, display: "inline-flex" }}><VideoGlyph /></span> : null}
+      </button>
+      {open ? <div style={{ margin: "2px 0 8px 28px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: e } }} event={e} /></div> : null}
+    </div>;
+}
+var CHIPS = [["today", "Today"], ["tomorrow", "Tomorrow"], ["rest_of_week", "This week"], ["next_week", "Next week"], ["this_month", "Month"], ["invites", "Invites"]];
+function weekdayOf(ymd) {
+  return (/* @__PURE__ */ new Date(`${ymd}T12:00:00Z`)).getUTCDay();
+}
+function boundsFor(r, now, months, dayPick) {
+  const today = now.slice(0, 10);
+  const nextMon = addDays(today, (8 - weekdayOf(today)) % 7 || 7);
+  switch (r) {
+    case "today":
+    case "invites":
+      return [today, addDays(today, 1)];
+    case "tomorrow":
+      return [addDays(today, 1), addDays(today, 2)];
+    case "rest_of_week":
+      return [today, nextMon];
+    case "next_week":
+      return [nextMon, addDays(nextMon, 7)];
+    case "this_month":
+      return [months[0]?.gridStart ?? today, months[0]?.gridEnd ?? addDays(today, 31)];
+    case "next_month":
+      return [months[1]?.gridStart ?? addDays(today, 31), months[1]?.gridEnd ?? addDays(today, 62)];
+    case "day":
+      return [dayPick ?? today, addDays(dayPick ?? today, 1)];
+    case "next_7_days":
+      return [today, addDays(today, 7)];
+    case "next_14_days":
+      return [today, addDays(today, 14)];
+    case "yesterday":
+      return [addDays(today, -1), today];
+    case "past_week":
+      return [addDays(today, -7), today];
+  }
+}
+function inRange(e, tz, from, to) {
+  const st = e.allDay ? e.start : wallOf(e.start, tz).slice(0, 10);
+  const en = e.allDay ? e.end : addDays(wallOf(e.end, tz).slice(0, 10), 1);
+  return st < to && en > from;
+}
 function Agenda({ ctx, note }) {
   const d = ctx.details ?? {};
   const tz = d.timeZone ?? "UTC";
-  const events = Array.isArray(d.events) ? d.events : [];
+  const all = Array.isArray(d.allEvents) && d.allEvents.length ? d.allEvents : Array.isArray(d.events) ? d.events : [];
+  const months = Array.isArray(d.months) ? d.months : d.month ? [d.month] : [];
   const comp = d.composition ?? { view: "agenda", range: "next_7_days", fields: { attendees: false, location: false, description: false, past: false }, by: "fallback" };
+  const now = d.now ?? wallOf((/* @__PURE__ */ new Date()).toISOString(), tz);
+  const initialRange = comp.fields.invitesOnly ? "invites" : comp.range;
+  const [range, setRange] = useState3(initialRange);
+  const [mode, setMode] = useState3(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda");
+  const [monthIx, setMonthIx] = useState3(comp.range === "next_month" ? 1 : 0);
+  const [openKey, setOpenKey] = useState3(null);
+  useEffect3(() => {
+    setRange(initialRange);
+    setMode(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda");
+    setMonthIx(comp.range === "next_month" ? 1 : 0);
+    setOpenKey(null);
+  }, [d]);
   const t0 = d.timing;
-  const caption0 = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t0?.google ? ` \xB7 Google ${t0.google}` : ""}${t0?.jev ? ` \xB7 Jev ${t0.jev}` : ""}`);
-  if (comp.view === "free") return <FreeTime ctx={ctx} caption={caption0} />;
-  if (comp.view === "month" && d.month) return <MonthGrid ctx={ctx} caption={caption0} />;
-  if (!events.length) return <ErrorCard message={`No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${(d.rangeLabel ?? RANGE_LABEL[comp.range] ?? "").toLowerCase()}.`} />;
-  if (comp.view === "event" && events.length === 1) return <EventCard ctx={ctx} event={events[0]} note={note} />;
-  const today = (d.now ?? wallOf((/* @__PURE__ */ new Date()).toISOString(), tz)).slice(0, 10);
+  const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t0?.google ? ` \xB7 Google ${t0.google}` : ""}${t0?.jev ? ` \xB7 Jev ${t0.jev}` : ""}`);
+  const fields = comp.fields;
+  const chips = <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+      {CHIPS.map(([k, label2]) => <Tab2 key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : mode === "agenda" && range === k)} onClick={() => {
+    setOpenKey(null);
+    if (k === "this_month") {
+      setMode("month");
+      setMonthIx(0);
+    } else {
+      setMode("agenda");
+      setRange(k);
+    }
+  }}>{label2}</Tab2>)}
+      <Tab2 on={mode === "free"} onClick={() => {
+    if (d.free) setMode("free");
+    else void ctx.send("When am I free this week?");
+  }}>Find a time</Tab2>
+    </div>;
+  if (mode === "free" && d.free) return <FreeTime ctx={ctx} caption={caption} chips={chips} />;
+  if (mode === "month" && months[monthIx]) {
+    const m = months[monthIx];
+    const inGrid = all.filter((e) => inRange(e, tz, m.gridStart, m.gridEnd));
+    return <section style={{ ...card, maxWidth: 760 }}>
+        <div style={{ ...pad, gap: 8 }}>
+          {chips}
+          <MonthGrid ctx={ctx} caption={caption} month={m} events={inGrid} canPrev={monthIx > 0} canNext={monthIx + 1 < months.length} onPrev={() => setMonthIx((i) => i - 1)} onNext={() => setMonthIx((i) => i + 1)} />
+        </div>
+      </section>;
+  }
+  const [from, to] = boundsFor(range, now, months, d.rangeLabel?.slice(-10));
+  const dayFilter = range === "day" && d.rangeLabel ? [d.rangeLabel.slice(-10), addDays(d.rangeLabel.slice(-10), 1)] : [from, to];
+  let events = all.filter((e) => inRange(e, tz, dayFilter[0], dayFilter[1]));
+  if (range === "invites") events = all.filter((e) => e.myResponse === "needsAction" && inRange(e, tz, now.slice(0, 10), addDays(now.slice(0, 10), 60)));
+  events = [...events].sort((a, b) => a.start.localeCompare(b.start));
+  const label = range === "invites" ? "Invitations" : range === "day" ? d.rangeLabel ?? "Day" : RANGE_LABEL[range] ?? "Agenda";
   const days = /* @__PURE__ */ new Map();
   for (const e of events) {
     const k = wallOf(e.start, tz).slice(0, 10);
     days.set(k, [...days.get(k) ?? [], e]);
   }
-  const t = d.timing;
-  const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.google ? ` \xB7 Google ${t.google}` : ""}${t?.jev ? ` \xB7 Jev ${t.jev}` : ""}`);
+  const today = now.slice(0, 10);
   return <section style={card}>
       <div style={{ ...pad, gap: 4 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{comp.fields.invitesOnly ? "Invitations" : d.rangeLabel ?? RANGE_LABEL[comp.range] ?? "Agenda"} <span style={{ ...muted, fontWeight: 400 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{label} <span style={{ ...muted, fontWeight: 400 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
+        {chips}
+        {!events.length ? <div style={{ ...muted, padding: "10px 8px 4px" }}>{range === "invites" ? "No unanswered invitations." : `Nothing scheduled ${label.toLowerCase()}.`}</div> : null}
         {[...days.entries()].map(([day, items]) => <div key={day} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${v("border")}` }}>
             <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
               <div style={{ ...muted, fontSize: 10, fontWeight: 600, letterSpacing: 0.5 }}>{fmtDay(day).split(",")[0].toUpperCase()}</div>
               <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 15, fontSize: 18, fontWeight: 500, background: day === today ? v("accent") : "transparent", color: day === today ? "white" : v("text-primary") }}>{dayNum(day)}</div>
             </div>
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-              {items.map((e) => <button
-    key={e.key}
-    type="button"
-    onClick={() => {
-      void ctx.send(`Show event ${e.key}`);
-    }}
-    title={`Open ${e.title}`}
-    {...hoverable}
-    style={{ ...bare, display: "flex", alignItems: "center", gap: 10, padding: "5px 8px", borderRadius: 8, cursor: "pointer", textAlign: "left" }}
-  >
-                  <Dot color={e.color} />
-                  <span style={{ ...muted, fontSize: 12, width: 118, flexShrink: 0 }}>{timeRange(e, tz)}</span>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, ...e.myResponse === "declined" ? { textDecoration: "line-through", ...muted } : {} }}>{e.title}</span>
-                  {comp.fields.location && e.location ? <span style={{ ...muted, fontSize: 12, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.location}</span> : null}
-                  {comp.fields.attendees && e.attendees.length ? <span style={{ ...muted, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 3 }}><UserGlyph />{e.attendees.length}</span> : null}
-                  {e.meet ? <span style={{ ...muted, display: "inline-flex" }}><VideoGlyph /></span> : null}
-                </button>)}
+              {items.map((e) => <EventRow key={e.key} e={e} tz={tz} open={openKey === e.key} onToggle={() => setOpenKey((k) => k === e.key ? null : e.key)} ctx={ctx} fields={fields} />)}
             </div>
           </div>)}
       </div>

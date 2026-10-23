@@ -178,7 +178,7 @@ export async function pickConnector(connectors: Connector[], kind: CardKind, par
 }
 
 /* ---------- registration ---------- */
-const CALL_FIRST = "There is no need to read a skill first: Bonsai attaches it to this tool's result. After it returns, reply with at most one short line.";
+const CALL_FIRST = "There is no need to read a skill first: Bonsai attaches it to this tool's result. After it returns, reply with NOTHING: the card is the whole answer, the person navigates inside it, and any sentence about what it shows or what to press is noise.";
 
 function describeConnectors(connectors: Connector[], kind: CardKind): string {
   return connectors.map((c) => {
@@ -249,7 +249,8 @@ export function registerCards(api: any, connectors: Connector[]) {
           if (picked) void logPick(root, { at: new Date().toISOString(), connector: connector.id, kind: tool.kind, task, picked });
           if (correction) { const all = await readPicks(root); const last = [...all].reverse().find((p) => p.connector === connector.id && p.kind === "draft"); if (last) { last.correction = correction; await root.write("picks", all.slice(-300)); } }
           const timing = { ...((payload.timing as object) ?? {}), total: ms(startedAt) };
-          return text(`[${connector.label}, routed by ${by}] ${summary}`, { ...payload, connector: connector.id, connectorLabel: connector.label, timing, ...(history.length ? { history } : {}) });
+          // The agent sees one terse line; routing, picks and timings ride in `details.debug` for the card and the evals.
+          return text(summary, { ...payload, connector: connector.id, connectorLabel: connector.label, timing, debug: { routedBy: by, picked: picked ?? null, timing }, ...(history.length ? { history } : {}) });
         } catch (err) {
           const e = err as Error;
           const why = connector.explain?.(err) ?? (e?.name === "AbortError" ? "The call was cancelled." : e?.message ?? String(err));

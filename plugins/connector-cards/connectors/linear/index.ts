@@ -49,10 +49,11 @@ export const linear = defineConnector({
     const project = comp.view === "project" ? (meta.projects.find((p) => p.name.toLowerCase() === (f.project ?? issues[0]?.project ?? "").toLowerCase()) ?? (f.project ? { name: f.project } : undefined)) : undefined;
     const who = comp.by === "jev" ? `Jev picked, ${comp.variant} questions answered` : "default pick, Jev unavailable";
     const how = comp.view === "board" || comp.view === "project" ? ` grouped by ${comp.groupBy}` : "";
-    const payload = { kind: "view", task: params.task, team: team.key, issues, options: optionsOf(meta), ...(project ? { project: { name: project.name, ...(project.lead ? { lead: project.lead } : {}), ...(project.targetDate ? { targetDate: project.targetDate } : {}), ...(project.summary ? { description: project.summary } : {}) } } : {}), composition: comp, timing: { linear: tLinear, jev: tJev } };
+    const payload = { kind: "view", task: params.task, team: team.key, issues, allIssues: all, options: optionsOf(meta), projects: meta.projects.map((p) => ({ name: p.name, ...(p.lead ? { lead: p.lead } : {}), ...(p.targetDate ? { targetDate: p.targetDate } : {}), ...(p.summary ? { description: p.summary } : {}) })), ...(project ? { project: { name: project.name, ...(project.lead ? { lead: project.lead } : {}), ...(project.targetDate ? { targetDate: project.targetDate } : {}), ...(project.summary ? { description: project.summary } : {}) } } : {}), composition: comp, timing: { linear: tLinear, jev: tJev } };
     const picked = `${comp.view} view, scope ${comp.scope}${how}, sorted by ${comp.sort}`;
-    if (!issues.length) return { summary: `No ${comp.scope === "all" ? "" : `${comp.scope} `}issues in ${team.key} match. Say so in one line.`, payload, picked };
-    return { summary: `Showing ${issues.length} ${team.key} issue${issues.length === 1 ? "" : "s"} as a ${comp.view} view${how}, scope ${comp.scope} (${who}; Linear ${tLinear}, Jev ${tJev}). The card is the answer: reply with one short line or nothing. Never restate its fields.`, payload, picked };
+    void who;
+    if (!issues.length) return { summary: `No ${comp.scope === "all" ? "" : `${comp.scope} `}issues in ${team.key} match. Say so in five words or fewer.`, payload, picked };
+    return { summary: `Card shown (${issues.length} ${team.key} issue${issues.length === 1 ? "" : "s"}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked };
   },
 
   async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
@@ -62,7 +63,7 @@ export const linear = defineConnector({
     const [issue] = await readIssues(token, meta, { identifiers: [ref] }, signal);
     if (!issue) throw new Error(`No issue ${ref} is visible to Bonsai's Linear account.`);
     const full = { ...issue, options: optionsOf(meta), ...(params.draft ? { commentDraft: params.draft } : {}) };
-    return { summary: `Showing ${issue.identifier} as a Linear issue card (Linear ${ms(startedAt)}). The card is the answer: reply with one short line or nothing.`, payload: { kind: "issue", issue: full, timing: { linear: ms(startedAt) } } };
+    return { summary: `Card shown (${issue.identifier}). Reply with nothing.`, payload: { kind: "issue", issue: full, timing: { linear: ms(startedAt) } } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -75,8 +76,9 @@ export const linear = defineConnector({
     const { value: picks, took: tJev } = await jev({ purpose: "linear-new-issue" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, rubric.guess) as { value: Picks; took: string };
     const draft = { team: team.key, title, description, state: picks.state, priority: picks.priority, ...(picks.assignee ? { assignee: picks.assignee } : {}), ...(picks.project ? { project: picks.project } : {}), labels: picks.labels, options: optionsOf(meta) };
     const summary = [draft.state, PRIORITY_NAMES[draft.priority], draft.project, draft.labels.join(", "), draft.assignee].filter(Boolean).join(" · ");
+    void tLinear; void tJev;
     return {
-      summary: `Draft "${title}" shown as Linear's create dialog with ${summary} (${picks.by === "jev" ? `Jev picked, ${picks.variant} questions answered` : "default pick, Jev unavailable"}; Linear ${tLinear}, Jev ${tJev}). Stop here with at most one short line. When the person presses Create issue, a message starting 'Create in ${team.key}:' arrives: call cards_apply with that whole message in \`message\`.`,
+      summary: `Create dialog shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Create in ${team.key}:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft, picks: { by: picks.by, confidence: picks.confidence }, timing: { linear: tLinear, jev: tJev } },
       picked: summary,
     };
@@ -104,7 +106,7 @@ export const linear = defineConnector({
     const fresh = (await Promise.all([...touched].map((id) => mcpCall(token, "get_issue", { id, fields: ISSUE_FIELDS }, signal).catch(() => undefined)))).filter((g) => g && (g as any).id).map(normalizeIssue) as Issue[];
     const comp: Composition = { view: fresh.length === 1 ? "issue" : "list", groupBy: "status", sort: "none", scope: "all", fields: { description: fresh.length === 1, labels: true, dates: false, assignee: true, project: true }, by: "fallback" };
     return {
-      summary: `Saved to Linear: ${applied.join("; ")} (Linear ${tWrite}). The card shows the updated issue${fresh.length === 1 ? "" : "s"}; reply with one short line or nothing.`,
+      summary: `Saved to Linear: ${applied.join("; ")}. The card shows the result; reply with nothing.`,
       payload: { kind: "view", task: "Saved", team: meta.key, issues: fresh, options: optionsOf(meta), composition: comp, applied, timing: { linear: tWrite } },
       ...(correction ? { correction: `created with ${correction}` } : {}),
     };

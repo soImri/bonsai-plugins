@@ -166,76 +166,109 @@ function IssueRow({ issue, value, onChange, options, fields, onOpen }: { issue: 
   );
 }
 
-/* ---------- ComposedView: Jev picked list / board / project (or one issue) ---------- */
+/* ---------- ComposedView: Jev picked list / board / project (or one issue); the person switches inside the card ---------- */
+type Scope = "open" | "active" | "done" | "all";
+const SCOPE_TYPES: Record<Scope, string[] | null> = { open: ["triage", "backlog", "unstarted", "started"], active: ["started"], done: ["completed"], all: null };
+const SCOPE_LABEL: Record<Scope, string> = { open: "Open", active: "In progress", done: "Done", all: "All" };
+const Tab = ({ on, children, onClick }: { on: boolean; children: ReactNode; onClick: () => void }) => (
+  <button type="button" onClick={onClick} style={{ ...bare, width: "auto", padding: "3px 8px", borderRadius: 6, fontSize: 12, fontWeight: on ? 600 : 400, background: on ? v("bg-subtle") : "transparent", color: on ? v("text-primary") : v("text-secondary"), cursor: "pointer" }}>{children}</button>
+);
+
 function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const d = ctx.details ?? {};
-  const issues: Issue[] = Array.isArray(d.issues) ? d.issues : [];
+  const all: Issue[] = Array.isArray(d.allIssues) && d.allIssues.length ? d.allIssues : Array.isArray(d.issues) ? d.issues : [];
   const options: Options | undefined = d.options;
-  const comp = useMemo<Composition>(() => { const n = issues.length; const fb: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" }; const c = d.composition; return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...(c.fields ?? {}) } } : fb; }, [d]);
+  const jevComp = useMemo<Composition>(() => { const n = (d.issues ?? all).length; const fb: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", scope: "open", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" }; const c = d.composition; return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...(c.fields ?? {}) } } : fb; }, [d]);
+  const [view, setView] = useState<Composition["view"]>(jevComp.view);
+  const [scope, setScope] = useState<Scope>((jevComp.scope as Scope) ?? "open");
+  const [groupBy, setGroupBy] = useState<NonNullable<Composition["groupBy"]>>(jevComp.groupBy ?? "status");
+  const [openId, setOpenId] = useState<string | null>(null);
+  useEffect(() => { setView(jevComp.view); setScope((jevComp.scope as Scope) ?? "open"); setGroupBy(jevComp.groupBy ?? "status"); setOpenId(null); }, [jevComp]);
   const states = options?.states?.length ? options.states : DEFAULT_STATES;
-  const seed = useMemo(() => Object.fromEntries(issues.map(i => [i.identifier, propsOf(i, states)])) as Record<string, Props>, [d]);
+  const seed = useMemo(() => Object.fromEntries(all.map(i => [i.identifier, propsOf(i, states)])) as Record<string, Props>, [d]);
   const [saved, setSaved] = useState(seed);
   const [cur, setCur] = useState(seed);
   const [saving, setSaving] = useState(false);
   const dirty = useRef(false);
   useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); } }, [seed]);
-  if (!issues.length) return <ErrorCard message={`No ${comp.scope && comp.scope !== "all" ? `${comp.scope} ` : ""}issues match.`} />;
+  const stateOf = (i: Issue) => cur[i.identifier]?.state ?? i.state;
+  const issues = all.filter(i => SCOPE_TYPES[scope] === null || SCOPE_TYPES[scope]!.includes(stateOf(i).type ?? ""));
   const applied: string[] | undefined = Array.isArray(d.applied) ? d.applied : undefined;
-  const savedNote = note ?? (applied ? `Saved · ${applied.join(" · ")}${d.timing?.linear ? ` · Linear ${d.timing.linear}` : ""}` : undefined);
+  const savedNote = note ?? (applied ? `Saved · ${applied.join(" · ")}` : undefined);
+  const comp = jevComp;
 
-  if (comp.view === "issue") {
-    const one = { ...issues[0], options: issues[0].options ?? options };
+  if (view === "issue" && all.length === 1) {
+    const one = { ...all[0], options: all[0].options ?? options };
     if (comp.fields.description === false) delete (one as any).description;
     return <IssueCard ctx={{ ...ctx, details: { ...d, kind: "issue", issue: one } }} note={savedNote} />;
   }
 
-  const changedIds = issues.filter(i => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map(i => i.identifier);
+  const changedIds = all.filter(i => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map(i => i.identifier);
   const changes = changedIds.map(id => saveLine(id, diff(saved[id], cur[id])));
   dirty.current = changes.length > 0;
   async function save() { setSaving(true); const next = cur; await ctx.send(changes.join("\n")); setSaved(next); setSaving(false); }
-  const open = (id: string) => { void ctx.send(`Show ${id}`); };
-  const team = d.team ?? issues[0]?.identifier.split("-")[0] ?? "";
+  const open = (id: string) => setOpenId(o => (o === id ? null : id));
+  const team = d.team ?? all[0]?.identifier.split("-")[0] ?? "";
   const sorted = [...issues].sort((a, b) => comp.sort === "newest" ? (b.createdAt ?? "").localeCompare(a.createdAt ?? "") : comp.sort === "priority" ? ((a.priority || 9) - (b.priority || 9)) : 0);
-  const gb = comp.view === "board" || comp.view === "project" ? (comp.groupBy ?? "status") : undefined;
-  const stateOf = (i: Issue) => cur[i.identifier]?.state ?? i.state;
+  const projects: string[] = [...new Set(all.map(i => i.project).filter(Boolean) as string[])];
+  const projectInfo = d.project ?? (projects.length === 1 ? (d.projects ?? []).find((p: any) => p.name === projects[0]) ?? { name: projects[0] } : undefined);
+  const effectiveView = view === "project" && !projectInfo ? "board" : view === "issue" ? "list" : view;
+  const gb = effectiveView === "board" || effectiveView === "project" ? groupBy : undefined;
   const keyFor = (i: Issue) => gb === "status" ? stateOf(i).name : gb === "project" ? (cur[i.identifier]?.project ?? "No project") : gb === "assignee" ? (cur[i.identifier]?.assignee ?? "Unassigned") : gb === "priority" ? PRIORITIES[cur[i.identifier]?.priority ?? 0] : "all";
   const leadFor = (sample: Issue): ReactNode => gb === "status" ? <StatusGlyph type={stateOf(sample).type} /> : gb === "project" ? <ProjectGlyph /> : gb === "assignee" ? <UserGlyph /> : gb === "priority" ? <PriorityGlyph p={cur[sample.identifier]?.priority ?? 0} /> : null;
   const groupsMap = new Map<string, Issue[]>();
   for (const i of sorted) { const k = keyFor(i); groupsMap.set(k, [...(groupsMap.get(k) ?? []), i]); }
   const groups = [...groupsMap.entries()].sort((a, b) => gb === "status" ? STATE_ORDER.indexOf(stateOf(a[1][0]).type ?? "") - STATE_ORDER.indexOf(stateOf(b[1][0]).type ?? "") : gb === "priority" ? PRIORITIES.indexOf(a[0]) - PRIORITIES.indexOf(b[0]) : a[0].localeCompare(b[0]));
-  const done = issues.filter(i => stateOf(i).type === "completed").length;
-  const inProgress = issues.filter(i => stateOf(i).type === "started").length;
-  const viewName = comp.view === "list" ? "List" : comp.view === "board" ? `Board by ${gb}` : "Project";
-  const t = d.timing as Record<string, string> | undefined;
-  const caption = savedNote ?? `${viewName} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.linear ? ` · Linear ${t.linear}` : ""}${t?.jev ? ` · Jev ${t.jev}` : ""}`;
+  const projIssues = effectiveView === "project" && projectInfo ? all.filter(i => i.project === projectInfo.name) : issues;
+  const done = projIssues.filter(i => stateOf(i).type === "completed").length;
+  const inProgress = projIssues.filter(i => stateOf(i).type === "started").length;
+  const row_ = (i: Issue) => (
+    <div key={i.identifier}>
+      <IssueRow issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={p => setCur(c => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} />
+      {openId === i.identifier ? <div style={{ margin: "2px 0 8px 30px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: { ...i, options: i.options ?? options } } }} /></div> : null}
+    </div>
+  );
+  const switcher = (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+      <span style={{ display: "inline-flex", gap: 2 }}>
+        <Tab on={effectiveView === "list"} onClick={() => setView("list")}>List</Tab>
+        <Tab on={effectiveView === "board"} onClick={() => setView("board")}>Board</Tab>
+        {projectInfo ? <Tab on={effectiveView === "project"} onClick={() => setView("project")}>Project</Tab> : null}
+        {gb ? <Picker items={["status", "project", "assignee", "priority"] as const} value={groupBy} onPick={g => setGroupBy(g)} label="Group" lead={() => null} keyOf={g => g} labelOf={g => `by ${g}`} /> : null}
+      </span>
+      <span style={{ display: "inline-flex", gap: 2 }}>
+        {(["open", "active", "done", "all"] as Scope[]).map(sc => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
+      </span>
+    </div>
+  );
+  const emptyNote = !issues.length ? <div style={{ ...muted, padding: "8px 8px 2px" }}>No {SCOPE_LABEL[scope].toLowerCase()} issues.</div> : null;
 
   return (
     <section style={card}>
       <div style={{ ...pad, gap: 8 }}>
-        {comp.view === "project" ? (
+        {effectiveView === "project" && projectInfo ? (
           <>
             <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>›</span><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ProjectGlyph />Project</span></div>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{d.project?.name ?? issues[0]?.project ?? "Project"}</h2>
-            {d.project?.description ? <div style={{ ...muted, fontSize: 13 }}>{d.project.description}</div> : null}
-            <div style={{ ...row, fontSize: 12, ...muted }}>{d.project?.lead ? <span>Lead {d.project.lead}</span> : null}{d.project?.targetDate ? <span>· Target {dayShort(d.project.targetDate)}</span> : null}<span>· {inProgress} in progress</span></div>
-            <ProgressBar done={done} total={issues.length} />
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{projectInfo.name}</h2>
+            {projectInfo.description ? <div style={{ ...muted, fontSize: 13 }}>{projectInfo.description}</div> : null}
+            <div style={{ ...row, fontSize: 12, ...muted }}>{projectInfo.lead ? <span>Lead {projectInfo.lead}</span> : null}{projectInfo.targetDate ? <span>· Target {dayShort(projectInfo.targetDate)}</span> : null}<span>· {inProgress} in progress</span></div>
+            <ProgressBar done={done} total={projIssues.length} />
           </>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
-            <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
-          </div>
+          <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span>{savedNote ? <span>· {savedNote}</span> : null}</div>
         )}
+        {switcher}
         <div style={{ display: "flex", flexDirection: "column", pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}>
+          {emptyNote}
           {groups.map(([key, items], gi) => (
             <div key={key} style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: gi === 0 ? 2 : 10 }}>
               {gb ? <GroupHeader lead={leadFor(items[0])} label={key} count={items.length} /> : null}
-              {items.map(i => <IssueRow key={i.identifier} issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={p => setCur(c => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} />)}
+              {items.map(row_)}
             </div>
           ))}
         </div>
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={comp.view === "project" ? caption : undefined} />
+      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} />
     </section>
   );
 }

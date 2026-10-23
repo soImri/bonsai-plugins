@@ -39,6 +39,9 @@ const createMessage = (d: { title: string; start: string; end: string; allDay: b
   `Create event: ${d.title}\nstart → ${d.start}; end → ${d.end}; all day → ${d.allDay ? "yes" : "no"}; guests → ${d.guests.trim() || "none"}; location → ${d.location.trim() || "none"}; meet → ${d.meet ? "yes" : "no"}${d.calendarName ? `; calendar → ${d.calendarName}` : ""}${d.notes.trim() ? `\n\nNotes:\n${d.notes.trim()}` : ""}`;
 
 /* ---------- pieces ---------- */
+const Tab = ({ on, children, onClick }: { on: boolean; children: React.ReactNode; onClick: () => void }) => (
+  <button type="button" onClick={onClick} style={{ ...bare, width: "auto", padding: "3px 8px", borderRadius: 6, fontSize: 12, fontWeight: on ? 600 : 400, background: on ? v("bg-subtle") : "transparent", color: on ? v("text-primary") : v("text-secondary"), cursor: "pointer" }}>{children}</button>
+);
 const Dot = ({ color }: { color?: string }) => <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: color ?? DEFAULT_COLOR, flexShrink: 0 }} />;
 const Line = ({ glyph, children }: { glyph: React.ReactNode; children: React.ReactNode }) => <div style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13 }}><span style={{ ...muted, display: "inline-flex", width: 16, justifyContent: "center", marginTop: 3 }}>{glyph}</span><div style={{ flex: 1, minWidth: 0 }}>{children}</div></div>;
 const inputStyle = { ...bare, width: "auto", border: `1px solid ${v("border")}`, borderRadius: 6, padding: "3px 6px", fontSize: 13, colorScheme: "light dark" as const };
@@ -126,58 +129,65 @@ function EventCard({ ctx, event: given, note }: { ctx: UiCtx; event?: Event; not
 /* ---------- Month: Google Calendar's month grid ---------- */
 const addDays = (ymd: string, n: number) => { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
-function MonthGrid({ ctx, caption }: { ctx: UiCtx; caption: string }) {
+type MonthInfo = { label: string; gridStart: string; gridEnd: string; first: string; next: string };
+function MonthGrid({ ctx, caption, month, events, onPrev, onNext, canPrev, canNext }: { ctx: UiCtx; caption: string; month: MonthInfo; events: Event[]; onPrev: () => void; onNext: () => void; canPrev: boolean; canNext: boolean }) {
   const d = ctx.details ?? {};
   const tz: string = d.timeZone ?? "UTC";
-  const m = d.month ?? {};
-  const events: Event[] = Array.isArray(d.events) ? d.events : [];
+  const m = month;
   const today = (d.now ?? wallOf(new Date().toISOString(), tz)).slice(0, 10);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  useEffect(() => { setSelected(null); setOpenKey(null); }, [m.first]);
   const byDay = new Map<string, Event[]>();
   for (const e of events) {
-    // An all-day or multi-day event occupies every day it covers; a timed one its start day.
-    const s = wallOf(e.start, tz).slice(0, 10);
+    const st = wallOf(e.start, tz).slice(0, 10);
     const endExclusive = e.allDay ? e.end : wallOf(e.end, tz).slice(0, 10);
-    for (let day = s; day < (e.allDay ? endExclusive : addDays(endExclusive, 1)) && day <= addDays(s, 31); day = addDays(day, 1)) byDay.set(day, [...(byDay.get(day) ?? []), e]);
+    for (let day = st; day < (e.allDay ? endExclusive : addDays(endExclusive, 1)) && day <= addDays(st, 31); day = addDays(day, 1)) byDay.set(day, [...(byDay.get(day) ?? []), e]);
   }
   const cells: string[] = [];
   for (let day = m.gridStart; day && day < m.gridEnd && cells.length < 42; day = addDays(day, 1)) cells.push(day);
   const inMonth = (day: string) => day >= m.first && day < m.next;
   const cell = { minHeight: 64, padding: "4px 4px 6px", borderTop: `1px solid ${v("border")}`, borderLeft: `1px solid ${v("border")}`, display: "flex", flexDirection: "column" as const, gap: 2, minWidth: 0 };
+  const pick = (day: string) => { setSelected(s => (s === day ? null : day)); setOpenKey(null); };
+  const dayItems = selected ? (byDay.get(selected) ?? []) : [];
   return (
-    <section style={{ ...card, maxWidth: 760 }}>
-      <div style={{ ...pad, gap: 6, paddingBottom: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>{m.label ?? "Month"} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
-            <Button variant="secondary" size="sm" onClick={() => { void ctx.send(`Show me ${m.label === d.now?.slice(0, 7) ? "last" : "the previous"} month on my calendar`); }} aria-label="Previous month">‹</Button>
-            <Button variant="secondary" size="sm" onClick={() => { void ctx.send("Show me next month on my calendar"); }} aria-label="Next month">›</Button>
-          </span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", fontSize: 10, fontWeight: 600, letterSpacing: 0.5, ...muted, textAlign: "center" }}>{["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map(w => <div key={w} style={{ padding: "2px 0 4px" }}>{w}</div>)}</div>
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 15, fontWeight: 600 }}>{m.label} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+          <Button variant="secondary" size="sm" disabled={!canPrev} onClick={onPrev} aria-label="Previous month">‹</Button>
+          <Button variant="secondary" size="sm" disabled={!canNext} onClick={onNext} aria-label="Next month">›</Button>
+        </span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderRight: `1px solid ${v("border")}`, borderBottom: `1px solid ${v("border")}`, margin: "0 20px 16px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", fontSize: 10, fontWeight: 600, letterSpacing: 0.5, ...muted, textAlign: "center" }}>{["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map(w => <div key={w} style={{ padding: "2px 0 4px" }}>{w}</div>)}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderRight: `1px solid ${v("border")}`, borderBottom: `1px solid ${v("border")}` }}>
         {cells.map(day => {
           const items = byDay.get(day) ?? [];
           const shown = items.slice(0, 3);
           return (
-            <div key={day} style={{ ...cell, opacity: inMonth(day) ? 1 : 0.45 }}>
-              <button type="button" onClick={() => { void ctx.send(`What's on my calendar on ${day}?`); }} title={`Open ${day}`}
-                style={{ ...bare, width: 24, height: 24, borderRadius: 12, alignSelf: "flex-start", fontSize: 12, fontWeight: day === today ? 700 : 500, background: day === today ? v("accent") : "transparent", color: day === today ? "white" : v("text-primary"), cursor: "pointer", textAlign: "center" }}>{Number(day.slice(8, 10))}</button>
+            <div key={day} onClick={() => pick(day)} style={{ ...cell, opacity: inMonth(day) ? 1 : 0.45, cursor: "pointer", background: selected === day ? v("bg-subtle") : "transparent" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 12, alignSelf: "flex-start", fontSize: 12, fontWeight: day === today ? 700 : 500, background: day === today ? v("accent") : "transparent", color: day === today ? "white" : v("text-primary") }}>{Number(day.slice(8, 10))}</span>
               {shown.map(e => (
-                <button key={e.key} type="button" onClick={() => { void ctx.send(`Show event ${e.key}`); }} title={`${e.title} · ${timeRange(e, tz)}`} {...hoverable}
+                <button key={e.key} type="button" onClick={ev => { ev.stopPropagation(); setSelected(day); setOpenKey(e.key); }} title={`${e.title} · ${timeRange(e, tz)}`} {...hoverable}
                   style={{ ...bare, display: "flex", alignItems: "center", gap: 4, padding: "1px 4px", borderRadius: 4, fontSize: 11, lineHeight: "16px", cursor: "pointer", textAlign: "left", ...(e.allDay ? { background: e.color ?? DEFAULT_COLOR, color: "white" } : {}), ...(e.myResponse === "declined" ? { textDecoration: "line-through", ...muted } : {}) }}>
                   {!e.allDay ? <span style={{ width: 6, height: 6, borderRadius: 3, background: e.color ?? DEFAULT_COLOR, flexShrink: 0 }} /> : null}
                   {!e.allDay ? <span style={{ ...muted, flexShrink: 0 }}>{fmtTime(wallOf(e.start, tz)).replace(":00", "").replace(" ", "").toLowerCase()}</span> : null}
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
                 </button>
               ))}
-              {items.length > 3 ? <button type="button" onClick={() => { void ctx.send(`What's on my calendar on ${day}?`); }} style={{ ...bare, width: "auto", fontSize: 11, ...muted, cursor: "pointer", padding: "0 4px", textAlign: "left" }}>+{items.length - 3} more</button> : null}
+              {items.length > 3 ? <span style={{ fontSize: 11, ...muted, padding: "0 4px" }}>+{items.length - 3} more</span> : null}
             </div>
           );
         })}
       </div>
-    </section>
+      {selected ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, paddingTop: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, padding: "2px 8px" }}>{fmtDay(selected, true)} <span style={{ ...muted, fontWeight: 400 }}>{dayItems.length ? `${dayItems.length} ${dayItems.length === 1 ? "event" : "events"}` : "nothing scheduled"}</span></div>
+          {dayItems.map(e => <EventRow key={e.key} e={e} tz={tz} open={openKey === e.key} onToggle={() => setOpenKey(k => (k === e.key ? null : e.key))} ctx={ctx} fields={{ attendees: true, location: true, description: true, past: true }} />)}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -188,7 +198,7 @@ const minsOf = (w: string) => { const [h, m] = (w.split(" ")[1] ?? "00:00").spli
 const wallAt = (date: string, mins: number) => `${date} ${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
 const hourLabel = (h: number) => `${((h + 11) % 12) + 1} ${h >= 12 ? "PM" : "AM"}`;
 
-function FreeTime({ ctx, caption }: { ctx: UiCtx; caption: string }) {
+function FreeTime({ ctx, caption, chips }: { ctx: UiCtx; caption: string; chips?: React.ReactNode }) {
   const d = ctx.details ?? {};
   const f = d.free ?? {};
   const days: FreeDay[] = Array.isArray(f.days) ? f.days : [];
@@ -224,6 +234,7 @@ function FreeTime({ ctx, caption }: { ctx: UiCtx; caption: string }) {
   return (
     <section style={{ ...card, maxWidth: 760 }}>
       <div style={{ ...pad, gap: 10, paddingBottom: 10 }}>
+        {chips}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <span style={{ fontSize: 15, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 10 }}>Find a time
             <Picker items={[15, 30, 45, 60, 90]} value={duration} onPick={m => { setDuration(m); setChosen(null); }} label="Duration" lead={() => <ClockGlyph />} keyOf={m => String(m)} labelOf={m => `${m} min`} />
@@ -276,30 +287,105 @@ function FreeTime({ ctx, caption }: { ctx: UiCtx; caption: string }) {
   );
 }
 
-/* ---------- Agenda: Google Calendar's schedule view ---------- */
+/* ---------- one agenda row, expandable to the event in place ---------- */
+function EventRow({ e, tz, open, onToggle, ctx, fields }: { e: Event; tz: string; open: boolean; onToggle: () => void; ctx: UiCtx; fields: Composition["fields"] }) {
+  return (
+    <div>
+      <button type="button" onClick={onToggle} title={open ? "Collapse" : `Open ${e.title}`} {...hoverable}
+        style={{ ...bare, display: "flex", alignItems: "center", gap: 10, padding: "5px 8px", borderRadius: 8, cursor: "pointer", textAlign: "left", background: open ? v("bg-subtle") : "transparent" }}>
+        <Dot color={e.color} />
+        <span style={{ ...muted, fontSize: 12, width: 118, flexShrink: 0 }}>{timeRange(e, tz)}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, ...(e.myResponse === "declined" ? { textDecoration: "line-through", ...muted } : {}) }}>{e.title}</span>
+        {fields.location && e.location ? <span style={{ ...muted, fontSize: 12, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.location}</span> : null}
+        {fields.attendees && e.attendees.length ? <span style={{ ...muted, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 3 }}><UserGlyph />{e.attendees.length}</span> : null}
+        {e.myResponse === "needsAction" ? <span style={{ fontSize: 10, fontWeight: 600, color: v("warning") }}>RSVP</span> : null}
+        {e.meet ? <span style={{ ...muted, display: "inline-flex" }}><VideoGlyph /></span> : null}
+      </button>
+      {open ? <div style={{ margin: "2px 0 8px 28px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: e } }} event={e} /></div> : null}
+    </div>
+  );
+}
+
+/* ---------- CalendarCard: the agenda with in-card ranges, the month grid, and Find a time ---------- */
+type RangeKey = "today" | "tomorrow" | "rest_of_week" | "next_week" | "this_month" | "next_month" | "invites" | "day" | "next_7_days" | "next_14_days" | "yesterday" | "past_week";
+const CHIPS: [RangeKey, string][] = [["today", "Today"], ["tomorrow", "Tomorrow"], ["rest_of_week", "This week"], ["next_week", "Next week"], ["this_month", "Month"], ["invites", "Invites"]];
+function weekdayOf(ymd: string) { return new Date(`${ymd}T12:00:00Z`).getUTCDay(); }
+function boundsFor(r: RangeKey, now: string, months: MonthInfo[], dayPick?: string): [string, string] {
+  const today = now.slice(0, 10);
+  const nextMon = addDays(today, ((8 - weekdayOf(today)) % 7) || 7);
+  switch (r) {
+    case "today": case "invites": return [today, addDays(today, 1)];
+    case "tomorrow": return [addDays(today, 1), addDays(today, 2)];
+    case "rest_of_week": return [today, nextMon];
+    case "next_week": return [nextMon, addDays(nextMon, 7)];
+    case "this_month": return [months[0]?.gridStart ?? today, months[0]?.gridEnd ?? addDays(today, 31)];
+    case "next_month": return [months[1]?.gridStart ?? addDays(today, 31), months[1]?.gridEnd ?? addDays(today, 62)];
+    case "day": return [dayPick ?? today, addDays(dayPick ?? today, 1)];
+    case "next_7_days": return [today, addDays(today, 7)];
+    case "next_14_days": return [today, addDays(today, 14)];
+    case "yesterday": return [addDays(today, -1), today];
+    case "past_week": return [addDays(today, -7), today];
+  }
+}
+function inRange(e: Event, tz: string, from: string, to: string) {
+  const st = e.allDay ? e.start : wallOf(e.start, tz).slice(0, 10);
+  const en = e.allDay ? e.end : addDays(wallOf(e.end, tz).slice(0, 10), 1);
+  return st < to && en > from;
+}
+
 function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const d = ctx.details ?? {};
   const tz: string = d.timeZone ?? "UTC";
-  const events: Event[] = Array.isArray(d.events) ? d.events : [];
+  const all: Event[] = Array.isArray(d.allEvents) && d.allEvents.length ? d.allEvents : Array.isArray(d.events) ? d.events : [];
+  const months: MonthInfo[] = Array.isArray(d.months) ? d.months : d.month ? [d.month] : [];
   const comp: Composition = d.composition ?? { view: "agenda", range: "next_7_days", fields: { attendees: false, location: false, description: false, past: false }, by: "fallback" };
+  const now: string = d.now ?? wallOf(new Date().toISOString(), tz);
+  const initialRange: RangeKey = comp.fields.invitesOnly ? "invites" : (comp.range as RangeKey);
+  const [range, setRange] = useState<RangeKey>(initialRange);
+  const [mode, setMode] = useState<"agenda" | "month" | "free">(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda");
+  const [monthIx, setMonthIx] = useState(comp.range === "next_month" ? 1 : 0);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  useEffect(() => { setRange(initialRange); setMode(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda"); setMonthIx(comp.range === "next_month" ? 1 : 0); setOpenKey(null); }, [d]);
   const t0 = d.timing as Record<string, string> | undefined;
-  const caption0 = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t0?.google ? ` · Google ${t0.google}` : ""}${t0?.jev ? ` · Jev ${t0.jev}` : ""}`);
-  if (comp.view === "free") return <FreeTime ctx={ctx} caption={caption0} />;
-  if (comp.view === "month" && d.month) return <MonthGrid ctx={ctx} caption={caption0} />;
-  if (!events.length) return <ErrorCard message={`No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${(d.rangeLabel ?? RANGE_LABEL[comp.range] ?? "").toLowerCase()}.`} />;
-  if (comp.view === "event" && events.length === 1) return <EventCard ctx={ctx} event={events[0]} note={note} />;
-  const today = (d.now ?? wallOf(new Date().toISOString(), tz)).slice(0, 10);
+  const caption = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t0?.google ? ` · Google ${t0.google}` : ""}${t0?.jev ? ` · Jev ${t0.jev}` : ""}`);
+  const fields = comp.fields;
+  const chips = (
+    <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+      {CHIPS.map(([k, label]) => <Tab key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : (mode === "agenda" && range === k))} onClick={() => { setOpenKey(null); if (k === "this_month") { setMode("month"); setMonthIx(0); } else { setMode("agenda"); setRange(k); } }}>{label}</Tab>)}
+      <Tab on={mode === "free"} onClick={() => { if (d.free) setMode("free"); else void ctx.send("When am I free this week?"); }}>Find a time</Tab>
+    </div>
+  );
+  if (mode === "free" && d.free) return <FreeTime ctx={ctx} caption={caption} chips={chips} />;
+  if (mode === "month" && months[monthIx]) {
+    const m = months[monthIx];
+    const inGrid = all.filter(e => inRange(e, tz, m.gridStart, m.gridEnd));
+    return (
+      <section style={{ ...card, maxWidth: 760 }}>
+        <div style={{ ...pad, gap: 8 }}>
+          {chips}
+          <MonthGrid ctx={ctx} caption={caption} month={m} events={inGrid} canPrev={monthIx > 0} canNext={monthIx + 1 < months.length} onPrev={() => setMonthIx(i => i - 1)} onNext={() => setMonthIx(i => i + 1)} />
+        </div>
+      </section>
+    );
+  }
+  const [from, to] = boundsFor(range, now, months, d.rangeLabel?.slice(-10));
+  const dayFilter = range === "day" && d.rangeLabel ? [d.rangeLabel.slice(-10), addDays(d.rangeLabel.slice(-10), 1)] as [string, string] : [from, to] as [string, string];
+  let events = all.filter(e => inRange(e, tz, dayFilter[0], dayFilter[1]));
+  if (range === "invites") events = all.filter(e => e.myResponse === "needsAction" && inRange(e, tz, now.slice(0, 10), addDays(now.slice(0, 10), 60)));
+  events = [...events].sort((a, b) => a.start.localeCompare(b.start));
+  const label = range === "invites" ? "Invitations" : range === "day" ? (d.rangeLabel ?? "Day") : RANGE_LABEL[range] ?? "Agenda";
   const days = new Map<string, Event[]>();
   for (const e of events) { const k = wallOf(e.start, tz).slice(0, 10); days.set(k, [...(days.get(k) ?? []), e]); }
-  const t = d.timing as Record<string, string> | undefined;
-  const caption = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.google ? ` · Google ${t.google}` : ""}${t?.jev ? ` · Jev ${t.jev}` : ""}`);
+  const today = now.slice(0, 10);
   return (
     <section style={card}>
       <div style={{ ...pad, gap: 4 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{comp.fields.invitesOnly ? "Invitations" : (d.rangeLabel ?? RANGE_LABEL[comp.range] ?? "Agenda")} <span style={{ ...muted, fontWeight: 400 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{label} <span style={{ ...muted, fontWeight: 400 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
+        {chips}
+        {!events.length ? <div style={{ ...muted, padding: "10px 8px 4px" }}>{range === "invites" ? "No unanswered invitations." : `Nothing scheduled ${label.toLowerCase()}.`}</div> : null}
         {[...days.entries()].map(([day, items]) => (
           <div key={day} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${v("border")}` }}>
             <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
@@ -307,17 +393,7 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
               <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, borderRadius: 15, fontSize: 18, fontWeight: 500, background: day === today ? v("accent") : "transparent", color: day === today ? "white" : v("text-primary") }}>{dayNum(day)}</div>
             </div>
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-              {items.map(e => (
-                <button key={e.key} type="button" onClick={() => { void ctx.send(`Show event ${e.key}`); }} title={`Open ${e.title}`} {...hoverable}
-                  style={{ ...bare, display: "flex", alignItems: "center", gap: 10, padding: "5px 8px", borderRadius: 8, cursor: "pointer", textAlign: "left" }}>
-                  <Dot color={e.color} />
-                  <span style={{ ...muted, fontSize: 12, width: 118, flexShrink: 0 }}>{timeRange(e, tz)}</span>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, ...(e.myResponse === "declined" ? { textDecoration: "line-through", ...muted } : {}) }}>{e.title}</span>
-                  {comp.fields.location && e.location ? <span style={{ ...muted, fontSize: 12, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.location}</span> : null}
-                  {comp.fields.attendees && e.attendees.length ? <span style={{ ...muted, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 3 }}><UserGlyph />{e.attendees.length}</span> : null}
-                  {e.meet ? <span style={{ ...muted, display: "inline-flex" }}><VideoGlyph /></span> : null}
-                </button>
-              ))}
+              {items.map(e => <EventRow key={e.key} e={e} tz={tz} open={openKey === e.key} onToggle={() => setOpenKey(k => (k === e.key ? null : e.key))} ctx={ctx} fields={fields} />)}
             </div>
           </div>
         ))}
