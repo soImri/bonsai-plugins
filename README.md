@@ -8,4 +8,4 @@ Bonsai plugins by Imri Sofer. Each plugin is a folder with its own `kay-plugin.j
 
 ## Install in Bonsai
 
-Add this repository as a plugin source (App Store → Sources, or ask Bonsai to add `https://github.com/imri-star/bonsai-plugins`), approve it, then install `connector-cards`. Updates arrive with each push.
+Add this repository as a plugin source (App Store → Sources, or ask Bonsai to add `https://github.com/soImri/bonsai-plugins`), approve it, then install `connector-cards`. Updates arrive with each push.
