@@ -67,7 +67,7 @@ function diskCache(dir: string | undefined): DiskCache {
 
 /* ---------- the pick log: what Jev chose, what the person then changed ---------- */
 export type CardKind = "view" | "record" | "draft" | "apply";
-type Pick = { at: string; connector: string; kind: CardKind; task: string; picked: string; correction?: string };
+type Pick = { at: string; connector: string; kind: CardKind; task: string; picked: string; correction?: string; context?: string; offered?: string[]; used?: string[] };
 const STOP = new Set(["the", "a", "an", "my", "me", "i", "in", "on", "of", "for", "to", "is", "are", "what", "whats", "what's", "show", "do", "have", "this", "that", "with", "and", "please", "can", "you"]);
 const words = (s: string) => new Set(String(s ?? "").toLowerCase().replace(/[^a-z0-9#' -]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)));
 
@@ -79,7 +79,52 @@ async function historyFor(cache: DiskCache, connector: string, kind: CardKind, t
   if (!want.size) return [];
   const all = await readPicks(cache);
   return all.filter((p) => p.connector === connector && p.kind === kind && [...words(p.task)].some((w) => want.has(w))).slice(-5)
-    .map((p) => `"${p.task}" → ${p.picked}${p.correction ? `; the person then changed: ${p.correction}` : ""}`);
+    .map((p) => `"${p.task}"${p.context ? ` (${p.context})` : ""} → ${p.picked}${p.offered?.length ? `; follow-ups offered: ${p.offered.join(", ")}` : ""}${p.used?.length ? `; then used: ${p.used.join(", ")}${p.used.some((u) => !(p.offered ?? []).includes(u)) ? " (not offered!)" : ""}` : ""}${p.correction ? `; the person then changed: ${p.correction}` : ""}`);
+}
+/** How often each follow-up was used after being offered, and how often it was needed without being offered: the prior Jev reads. */
+async function usageFor(cache: DiskCache, connector: string): Promise<string> {
+  const all = (await readPicks(cache)).filter((p) => p.connector === connector && (p.offered?.length || p.used?.length));
+  if (!all.length) return "none yet";
+  const offered: Record<string, number> = {}, used: Record<string, number> = {}, missed: Record<string, number> = {};
+  for (const p of all) { for (const a of p.offered ?? []) offered[a] = (offered[a] ?? 0) + 1; for (const a of p.used ?? []) { used[a] = (used[a] ?? 0) + 1; if (!(p.offered ?? []).includes(a)) missed[a] = (missed[a] ?? 0) + 1; } }
+  return Object.keys({ ...offered, ...used }).map((a) => `${a}: offered ${offered[a] ?? 0}, used ${used[a] ?? 0}${missed[a] ? `, needed but not offered ${missed[a]}` : ""}`).join("; ");
+}
+/** When a card's message comes back, note which follow-up it was on the last card of this connector (the learning signal). */
+async function noteUsed(cache: DiskCache, connector: string, used: string[]) {
+  if (!used.length) return;
+  const all = await readPicks(cache);
+  const last = [...all].reverse().find((p) => p.connector === connector && p.kind !== "apply" && Date.now() - new Date(p.at).getTime() < 2 * 3600e3);
+  if (!last) return;
+  last.used = [...new Set([...(last.used ?? []), ...used])];
+  await cache.write("picks", all.slice(-300));
+}
+
+/* ---------- follow-ups: the few actions the card offers beside its primary surface ---------- */
+/**
+ * A follow-up is one control a card can show beyond what the task itself needs: a priority picker
+ * on an issue, a reply box under a thread, RSVP buttons on an event. The card shows the primary
+ * surface plus the follow-ups Jev judged likely from the ask, the conversation context, and what
+ * the person did after similar asks; everything else waits behind "More" (one local click).
+ */
+export type FollowUp = { id: string; label: string; when: string; unless?: string; guess: boolean; always?: boolean };
+export type FollowUpPick = { actions: string[]; by: "jev" | "fallback"; probabilities?: Record<string, number> };
+export const MAX_FOLLOW_UPS = 3;
+
+export async function pickFollowUps(jev: Decide, purpose: string, state: object, candidates: FollowUp[], usage: string, context: string): Promise<FollowUpPick & { took: string }> {
+  const always = candidates.filter((c) => c.always).map((c) => c.id);
+  const asked = candidates.filter((c) => !c.always).slice(0, JEV_MAX_QUESTIONS);
+  if (!asked.length) return { actions: always, by: "fallback", took: "0 ms" };
+  const questions: Record<string, JevQuestion> = {};
+  for (const c of asked) questions[c.id] = { type: "bool", instructions: `Will the person want to ${c.label} right after seeing this card, without typing another message? Judge the ask, the conversation context, and what they did after similar asks. Offer at most ${MAX_FOLLOW_UPS} follow-ups per card: say yes only when this one is likely, not merely possible.`, criteria: { true: c.when, false: c.unless ?? "Nothing in the ask or the context points at it; the person would be fine with it one click away under More." } };
+  const { value, took, by } = await jev({ purpose }, async (j) => {
+    const { answers } = await classify(j, { ...state, conversationContext: context || "none (a fresh ask)", followUpUsageSoFar: usage }, questions);
+    const probabilities: Record<string, number> = {};
+    for (const c of asked) if (answers[c.id]?.type === "bool") probabilities[c.id] = answers[c.id].probability;
+    if (!Object.keys(probabilities).length) return undefined;
+    const picked = asked.filter((c) => (probabilities[c.id] ?? (c.guess ? 0.5 : 0)) >= 0.5).sort((a, b) => (probabilities[b.id] ?? 0) - (probabilities[a.id] ?? 0)).slice(0, MAX_FOLLOW_UPS).map((c) => c.id);
+    return { actions: [...always, ...picked], by: "jev" as const, probabilities };
+  }, () => ({ actions: [...always, ...asked.filter((c) => c.guess).slice(0, MAX_FOLLOW_UPS).map((c) => c.id)], by: "fallback" as const }));
+  return { ...(value as FollowUpPick), took };
 }
 /** A connector describes a pick ("list, scope open, grouped by status") and, for drafts, what the person changed on apply. */
 export type PickSummary = { picked: string; correctionOf?: (applied: Record<string, any>) => string | undefined };
@@ -92,6 +137,10 @@ export type CardResult = {
   picked?: string;
   /** For apply: what the person changed versus the last draft's picks ("priority Medium → High"). */
   correction?: string;
+  /** The follow-up ids the card offers (logged; the next similar ask learns from what got used). */
+  offered?: string[];
+  /** For apply: which follow-ups the message exercised ("priority", "comment"), by the connector's own reading. */
+  used?: string[];
 };
 
 export type Run = {
@@ -106,6 +155,10 @@ export type Run = {
   cache: DiskCache;
   /** Recent picks for asks like this one (and what the person changed afterwards). Put it in the rubric's state. */
   history: string[];
+  /** What the agent knows around the ask: the conversation's thread, a memory that bears on it. Empty in a fresh chat. */
+  context: string;
+  /** Picks the follow-ups for a card: runs beside the composition classify, same Jev budget. */
+  followUps: (purpose: string, state: object, candidates: FollowUp[]) => Promise<FollowUpPick & { took: string }>;
 };
 
 export type Connector = {
@@ -193,24 +246,25 @@ export function registerCards(api: any, connectors: Connector[]) {
   const names = connectors.map((c) => c.label).join(", ");
   const connectorParam = { type: "string", description: `Which app: ${connectors.map((c) => `"${c.id}" (${c.label})`).join(", ")}. Omit when the ask makes it obvious; the plugin routes by references, keywords, or Jev.` };
   const accountParam = { type: "string", description: "Account id to use when several accounts of that app are connected. Omit otherwise." };
+  const contextParam = { type: "string", description: "One or two short lines on what surrounds the ask, so the card can offer the right follow-ups: what the conversation is about, what the person just did or said, anything in memory that bears on it (e.g. 'triaging before Friday's review; they own NEAT-9', 'they just asked to move the call; Seb is a Yaklabs contact'). Omit in a fresh chat with nothing to add." };
 
   const tools: { kind: CardKind; name: string; label: string; description: string; properties: Record<string, unknown>; required: string[]; failing: string }[] = [
     {
       kind: "view", name: "cards_view", label: "Connector cards: view", failing: "read the records for the view",
       description: `Show records from a connected app (${names}) in the chat as that app's own UI. Call this FIRST, with the person's words: the plugin reads the app itself (no URI or MCP reads needed), Jev picks the view (one record, a list, a board, an agenda…) plus scope and fields, and the card draws it. ${describeConnectors(connectors, "view")} Pass refs when the ask names records, query only when it names a topic. ${CALL_FIRST}`,
-      properties: { connector: connectorParam, task: { type: "string", description: "The person's request, in their words." }, refs: { type: "array", items: { type: "string" }, description: "Record references the ask names (e.g. [\"NEAT-9\"]). Omit otherwise." }, query: { type: "string", description: "A topic keyword to filter by, only when the ask names a topic. Omit otherwise." }, filters: { type: "object", additionalProperties: { type: "string" }, description: "Connector filters by key (see the connector's filter list). Omit otherwise." }, account: accountParam },
+      properties: { connector: connectorParam, task: { type: "string", description: "The person's request, in their words." }, refs: { type: "array", items: { type: "string" }, description: "Record references the ask names (e.g. [\"NEAT-9\"]). Omit otherwise." }, query: { type: "string", description: "A topic keyword to filter by, only when the ask names a topic. Omit otherwise." }, filters: { type: "object", additionalProperties: { type: "string" }, description: "Connector filters by key (see the connector's filter list). Omit otherwise." }, context: contextParam, account: accountParam },
       required: ["task"],
     },
     {
       kind: "record", name: "cards_record", label: "Connector cards: one record", failing: "read the record",
       description: `Show ONE record from a connected app (${names}) as that app's own detail view, with live controls. Call this FIRST with just the reference. ${describeConnectors(connectors, "record")} ${CALL_FIRST}`,
-      properties: { connector: connectorParam, ref: { type: "string", description: "The record reference: an identifier like NEAT-9, a card key like #a1b2c3, or a title to look up." }, draft: { type: "string", description: "Text to prefill in the card's composer (a comment, a reply). Optional." }, account: accountParam },
+      properties: { connector: connectorParam, ref: { type: "string", description: "The record reference: an identifier like NEAT-9, a card key like #a1b2c3, or a title to look up." }, draft: { type: "string", description: "Text to prefill in the card's composer (a comment, a reply). Optional." }, context: contextParam, account: accountParam },
       required: ["ref"],
     },
     {
       kind: "draft", name: "cards_draft", label: "Connector cards: draft a new record", failing: "prepare the draft",
       description: `Draft a NEW record in a connected app (${names}) as that app's own create dialog. Call this FIRST with the person's words plus a title: the plugin reads the app's pick lists itself, Jev picks the properties, and the person edits the card and presses the create button. Do not create anything yourself; the card sends a message when the person is ready. ${describeConnectors(connectors, "draft")} ${CALL_FIRST}`,
-      properties: { connector: connectorParam, task: { type: "string", description: "The person's request, in their words." }, title: { type: "string", description: "A title of at most 80 characters in the app's style. Derived from the task when omitted." }, body: { type: "string", description: "At most three short lines of description, only when the task gives real detail. Omit otherwise." }, fields: { type: "object", additionalProperties: true, description: "Structured values the ask states and the app needs, by connector: for a calendar event, start and end as ISO date-times (the person's local time, e.g. 2026-10-24T15:00) and attendees as emails. Omit what the ask does not say." }, account: accountParam },
+      properties: { connector: connectorParam, task: { type: "string", description: "The person's request, in their words." }, title: { type: "string", description: "A title of at most 80 characters in the app's style. Derived from the task when omitted." }, body: { type: "string", description: "At most three short lines of description, only when the task gives real detail. Omit otherwise." }, fields: { type: "object", additionalProperties: true, description: "Structured values the ask states and the app needs, by connector: for a calendar event, start and end as ISO date-times (the person's local time, e.g. 2026-10-24T15:00) and attendees as emails. Omit what the ask does not say." }, context: contextParam, account: accountParam },
       required: ["task"],
     },
     {
@@ -244,9 +298,13 @@ export function registerCards(api: any, connectors: Connector[]) {
         try {
           const root = diskCache(ctx?.paths?.dataDir);
           const task = String(params?.task ?? params?.message ?? params?.ref ?? "");
-          const history = tool.kind === "view" || tool.kind === "draft" ? await historyFor(root, connector.id, tool.kind, task) : [];
-          const { summary, payload, picked, correction } = await connector[tool.kind]({ connector, token: auth.auth.accessToken, account: auth.auth.account, params: params ?? {}, signal, startedAt, jev, cache: diskCache(ctx?.paths?.dataDir ? `${ctx.paths.dataDir}/${connector.id}` : undefined), history });
-          if (picked) void logPick(root, { at: new Date().toISOString(), connector: connector.id, kind: tool.kind, task, picked });
+          const history = tool.kind !== "apply" ? await historyFor(root, connector.id, tool.kind, task) : [];
+          const context = typeof params?.context === "string" ? params.context.trim().slice(0, 400) : "";
+          const usage = tool.kind !== "apply" ? await usageFor(root, connector.id) : "";
+          const followUps = (purpose: string, state: object, candidates: FollowUp[]) => pickFollowUps(jev, purpose, state, candidates, usage, context);
+          const { summary, payload, picked, correction, offered, used } = await connector[tool.kind]({ connector, token: auth.auth.accessToken, account: auth.auth.account, params: params ?? {}, signal, startedAt, jev, cache: diskCache(ctx?.paths?.dataDir ? `${ctx.paths.dataDir}/${connector.id}` : undefined), history, context, followUps });
+          if (picked) await logPick(root, { at: new Date().toISOString(), connector: connector.id, kind: tool.kind, task, picked, ...(context ? { context } : {}), ...(offered?.length ? { offered } : {}) });
+          if (used?.length) await noteUsed(root, connector.id, used);
           if (correction) { const all = await readPicks(root); const last = [...all].reverse().find((p) => p.connector === connector.id && p.kind === "draft"); if (last) { last.correction = correction; await root.write("picks", all.slice(-300)); } }
           const timing = { ...((payload.timing as object) ?? {}), total: ms(startedAt) };
           // The agent sees one terse line; routing, picks and timings ride in `details.debug` for the card and the evals.

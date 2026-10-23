@@ -15,6 +15,15 @@
 
 **Jev picks (view):** range, focus, show threads, show reactions. **Jev picks (draft):** the conversation (up to 8 candidates).
 
+**Follow-ups (Jev picks up to three per card; `More` reveals the rest):**
+
+| Screen | Primary surface | Follow-up candidates (`when`) |
+| --- | --- | --- |
+| Channel / thread | the messages, day dividers, threads expand in place, open-in-Slack | `compose` (the composer: mentions, asked to reply, usually writes here) · `reply` (reply boxes under threads) · `react` (quick reactions: acknowledging, approving) |
+| Inbox | conversations with their recent messages, expand in place | `compose` · `reply` · `react` · `focus` (All / Mentions / DMs) · `ranges` (Today / 3 days / Week / 2 weeks) |
+
+"What's new in #neat-build" is a read; the same ask with "he wants to reply to the latest post" gets the composer.
+
 **Card messages (writes only):** `Post in #name:` + body · `Reply in #name <ts>:` + body · `React to #name <ts>: :emoji:`.
 
 **Not built:** scheduling, pins, files (listed only), editing or deleting messages, opening new DMs, unread counts (Slack's API does not expose them cheaply), profile cards, paging past 100 messages or two weeks (a layer-2 endpoint candidate).

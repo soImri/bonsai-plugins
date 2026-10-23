@@ -41,6 +41,18 @@ export const hoverable = { onMouseEnter: (e: any) => (e.currentTarget.style.back
 export function parse<T>(raw: string | undefined): T | null { if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } }
 export const dayShort = (s?: string) => (s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
 
+/* ---------- follow-ups: the card shows its primary surface plus the few controls Jev picked; More reveals the rest (locally) ---------- */
+export function useFollowUps(offered: string[] | undefined, resetOn: unknown) {
+  const [more, setMore] = useState(false);
+  useEffect(() => { setMore(false); }, [resetOn]);
+  const set = new Set(offered ?? []);
+  const gated = Array.isArray(offered);
+  return { has: (id: string) => !gated || more || set.has(id), more, toggle: () => setMore((m) => !m), gated };
+}
+export function MoreChip({ on, onClick, label }: { on: boolean; onClick: () => void; label?: string }) {
+  return <button type="button" onClick={onClick} title={on ? "Fewer controls" : "More controls"} style={{ ...bare, width: "auto", padding: "2px 8px", borderRadius: 6, fontSize: 12, color: v("text-secondary"), cursor: "pointer", background: on ? v("bg-subtle") : "transparent" }}>{on ? "Less" : label ?? "More"}</button>;
+}
+
 export function ErrorCard({ message }: { message: string }) { return <div style={{ ...card, ...pad, ...muted }}>{message}</div>; }
 export function Placeholder({ text }: { text: string }) { return <div style={{ ...card, ...pad, ...muted }}>{text}</div>; }
 export function Timing({ t, labels }: { t?: Record<string, string>; labels?: Record<string, string> }) {
@@ -68,9 +80,11 @@ export function OpenExternal({ url, title, onOpen }: { url: string; title: strin
 }
 
 /* ---------- Picker: a pill (or a bare glyph) that opens a portaled list ---------- */
-export function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title }: {
+export function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title, readOnly }: {
   items: T[]; value: T | T[] | undefined; onPick: (t: T) => void; label: string;
   lead: (t: T | undefined) => ReactNode; keyOf: (t: T) => string; labelOf: (t: T) => string; emphasis?: boolean; multi?: boolean; compact?: boolean; title?: string;
+  /** Show the value as a plain pill (no caret, no menu): the property is not one of this card's follow-ups. */
+  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -94,6 +108,10 @@ export function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, e
   const text = selected.length ? selected.map(labelOf).join(", ") : label;
   const isSel = (t: T) => selected.some(s => keyOf(s) === keyOf(t));
   const single = Array.isArray(value) ? undefined : value;
+  if (readOnly) {
+    if (compact) return <span title={title ?? `${label}: ${text}`} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 22, height: 22, color: v("text-secondary"), padding: "0 3px" }}>{lead(single)}</span>;
+    return <span style={{ display: "inline-flex" }}><Pill tone={emphasis ? "emphasis" : "neutral"} surface={emphasis ? "bare" : "glass"} lead={lead(single)}>{text}</Pill></span>;
+  }
   return (
     <div ref={trigger} style={{ display: "inline-flex" }} onClick={e => e.stopPropagation()}>
       {compact

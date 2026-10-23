@@ -6,13 +6,13 @@
  * What a card sends is a short command in plain words; `write.ts` parses it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ErrorCard, OpenExternal, Picker, Placeholder, bare, card, footer, hoverable, muted, pad, row, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
+import { Button, ErrorCard, MoreChip, OpenExternal, Picker, Placeholder, bare, card, footer, hoverable, muted, pad, row, useFollowUps, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
 
 type Conv = { id: string; name: string; kind: "channel" | "private" | "dm" | "group"; topic?: string; members?: number };
 type Reaction = { name: string; count: number; mine: boolean };
 type Att = { title?: string; link?: string; text?: string; pretext?: string; color?: string; footer?: string; author?: string; fields?: { title?: string; value: string }[]; image?: string };
 type Msg = { ref: string; channel: string; channelName: string; ts: string; threadTs?: string; time: string; userId?: string; user: string; initials: string; bot?: boolean; text: string; attachments?: Att[]; reactions: Reaction[]; replyCount: number; permalink?: string; mentionsMe: boolean; edited?: boolean; files?: { name: string; title?: string }[] };
-type Composition = { view: "inbox" | "channel" | "thread"; range: string; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean }; by: "jev" | "fallback" };
+type Composition = { view: "inbox" | "channel" | "thread"; range: string; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean }; by: "jev" | "fallback"; followUps?: string[] };
 
 const RANGE_LABEL: Record<string, string> = { today: "Today", yesterday: "Yesterday", "3_days": "Last 3 days", week: "This week", "2_weeks": "Last 2 weeks" };
 const EMOJI: Record<string, string> = { thumbsup: "👍", "+1": "👍", white_check_mark: "✅", eyes: "👀", heart: "❤️", tada: "🎉", raised_hands: "🙌", pray: "🙏", fire: "🔥", rocket: "🚀", joy: "😂", smile: "😄", thinking_face: "🤔", clap: "👏", wave: "👋", 100: "💯", ok_hand: "👌", point_up: "☝️" };
@@ -57,7 +57,7 @@ function AttachmentCard({ a, ctx }: { a: Att; ctx: UiCtx }) {
   );
 }
 
-function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }: { m: Msg; ctx: UiCtx; fields: Composition["fields"]; showChannel?: boolean; replies?: Msg[]; compact?: boolean; convOf: (id: string) => Conv | undefined }) {
+function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf, can }: { m: Msg; ctx: UiCtx; fields: Composition["fields"]; showChannel?: boolean; replies?: Msg[]; compact?: boolean; convOf: (id: string) => Conv | undefined; can: (id: string) => boolean }) {
   const [hover, setHover] = useState(false);
   const [open, setOpen] = useState(false);
   const conv = convOf(m.channel);
@@ -81,24 +81,24 @@ function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }: {
           {m.files?.length ? <div style={{ ...muted, fontSize: 12 }}>📎 {m.files.map(f => f.title ?? f.name).join(", ")}</div> : null}
           {(fields.reactions && m.reactions.length) || (fields.threads && count) ? (
             <div style={{ ...row, marginTop: 4 }}>
-              {fields.reactions ? m.reactions.map(r => <button key={r.name} type="button" onClick={() => sendReact(r.name)} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: "pointer" }}>{emoji(r.name)} {r.count}</button>) : null}
+              {fields.reactions ? m.reactions.map(r => <button key={r.name} type="button" onClick={can("react") ? () => sendReact(r.name) : undefined} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: can("react") ? "pointer" : "default" }}>{emoji(r.name)} {r.count}</button>) : null}
               {fields.threads && count ? <button type="button" onClick={() => setOpen(o => !o)} style={{ ...bare, width: "auto", fontSize: 12, color: v("accent"), fontWeight: 600, cursor: "pointer" }}>{open ? "Hide thread" : `${count} ${count === 1 ? "reply" : "replies"} ›`}</button> : null}
             </div>
           ) : null}
         </div>
-        {hover ? (
+        {hover && (can("react") || can("reply") || m.permalink) ? (
           <div style={{ position: "absolute", top: -10, right: 8, display: "inline-flex", gap: 2, padding: 2, borderRadius: 6, border: `1px solid ${v("border")}`, background: v("bg-elevated"), boxShadow: "0 2px 8px rgba(0,0,0,.08)" }}>
-            {QUICK.map(q => <button key={q} type="button" onClick={() => sendReact(q)} title={`React :${q}:`} {...hoverable} style={{ ...bare, width: 26, height: 24, borderRadius: 4, cursor: "pointer", fontSize: 14 }}>{emoji(q)}</button>)}
-            <button type="button" onClick={() => setOpen(true)} title="Reply in thread" {...hoverable} style={{ ...bare, width: "auto", height: 24, padding: "0 6px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>Reply</button>
+            {can("react") ? QUICK.map(q => <button key={q} type="button" onClick={() => sendReact(q)} title={`React :${q}:`} {...hoverable} style={{ ...bare, width: 26, height: 24, borderRadius: 4, cursor: "pointer", fontSize: 14 }}>{emoji(q)}</button>) : null}
+            {can("reply") ? <button type="button" onClick={() => setOpen(true)} title="Reply in thread" {...hoverable} style={{ ...bare, width: "auto", height: 24, padding: "0 6px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>Reply</button> : null}
             {m.permalink ? <OpenExternal url={m.permalink} title="Open in Slack" onOpen={ctx.openUrl} /> : null}
           </div>
         ) : null}
       </div>
       {open ? (
         <div style={{ margin: "0 0 8px 44px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 2 }}>
-          {(replies ?? []).map(r => <MessageRow key={r.ts} m={r} ctx={ctx} fields={{ reactions: fields.reactions, threads: false }} compact convOf={convOf} />)}
+          {(replies ?? []).map(r => <MessageRow key={r.ts} m={r} ctx={ctx} fields={{ reactions: fields.reactions, threads: false }} compact convOf={convOf} can={can} />)}
           {count > (replies?.length ?? 0) ? <div style={{ ...muted, fontSize: 12, padding: "2px 8px" }}>{count - (replies?.length ?? 0)} older {count - (replies?.length ?? 0) === 1 ? "reply is" : "replies are"} in Slack{m.permalink ? "" : ""}.</div> : null}
-          <ComposeBox placeholder="Reply…" sendLabel="Reply" onSend={async text => { await ctx.send(`Reply in ${tgt} ${m.ts}:\n${text}`); }} />
+          {can("reply") ? <ComposeBox placeholder="Reply…" sendLabel="Reply" onSend={async text => { await ctx.send(`Reply in ${tgt} ${m.ts}:\n${text}`); }} /> : null}
         </div>
       ) : null}
     </div>
@@ -141,6 +141,7 @@ function ChannelView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const all: Msg[] = Array.isArray(d.messages) ? d.messages : [];
   const comp: Composition = d.composition ?? { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
   const isThread = d.view === "thread" && d.threadTs;
+  const fu = useFollowUps(comp.followUps, d);
   if (!ch) return <Placeholder text="No conversation data." />;
   const { parents, repliesOf } = isThread ? { parents: all, repliesOf: new Map<string, Msg[]>() } : splitThreads(all);
   const days = new Map<string, Msg[]>();
@@ -155,16 +156,16 @@ function ChannelView({ ctx, note }: { ctx: UiCtx; note?: string }) {
             <div style={{ fontSize: 15, fontWeight: 700 }}>{isThread ? "Thread" : convLabel(ch)}{isThread ? <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}> · {convLabel(ch)}</span> : null}{ch.kind === "private" ? <span style={{ ...muted, fontSize: 12 }}> 🔒</span> : null}</div>
             {!isThread && (ch.topic || ch.members) ? <div style={{ ...muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{[ch.members ? `${ch.members} members` : null, ch.topic].filter(Boolean).join(" · ")}</div> : null}
           </div>
-          <span style={{ ...muted, fontSize: 12, flexShrink: 0 }}>{caption}</span>
+          <span style={{ ...muted, fontSize: 12, flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 6 }}>{caption}{fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}</span>
         </div>
         {!parents.length ? <div style={{ ...muted, padding: "8px" }}>No messages in the last two weeks.</div> : null}
         {[...days.entries()].map(([k, items]) => (
           <div key={k}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}><span style={{ flex: 1, height: 1, background: v("border") }} /><span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 12, border: `1px solid ${v("border")}` }}>{dayLabel(items[0].time)}</span><span style={{ flex: 1, height: 1, background: v("border") }} /></div>
-            {items.map((m, i) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={isThread ? { ...comp.fields, threads: false } : comp.fields} replies={repliesOf.get(m.ts)} compact={isThread && i > 0} convOf={convOf} />)}
+            {items.map((m, i) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={isThread ? { ...comp.fields, threads: false } : comp.fields} replies={repliesOf.get(m.ts)} compact={isThread && i > 0} convOf={convOf} can={fu.has} />)}
           </div>
         ))}
-        <ComposeBox placeholder={isThread ? "Reply…" : `Message ${convLabel(ch)}`} draft={d.draft} sendLabel={isThread ? "Reply" : "Send"} onSend={async text => { await ctx.send(isThread ? `Reply in ${tgt} ${d.threadTs}:\n${text}` : `Post in ${tgt}:\n${text}`); }} />
+        {fu.has("compose") || d.draft ? <ComposeBox placeholder={isThread ? "Reply…" : `Message ${convLabel(ch)}`} draft={d.draft} sendLabel={isThread ? "Reply" : "Send"} onSend={async text => { await ctx.send(isThread ? `Reply in ${tgt} ${d.threadTs}:\n${text}` : `Post in ${tgt}:\n${text}`); }} /> : null}
       </div>
     </section>
   );
@@ -181,6 +182,7 @@ function InboxView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const [focus, setFocus] = useState<Composition["focus"]>(comp.focus);
   const [range, setRange] = useState<string>(comp.range);
   const [openConv, setOpenConv] = useState<string | null>(null);
+  const fu = useFollowUps(comp.followUps, d);
   useEffect(() => { setFocus(comp.focus); setRange(comp.range); setOpenConv(null); }, [d]);
   const cutoff = Date.now() - (RANGE_DAYS[range] + (range === "today" ? 1 : 0)) * 864e5;
   const todayKey = new Date().toLocaleDateString("en-CA");
@@ -199,11 +201,12 @@ function InboxView({ ctx, note }: { ctx: UiCtx; note?: string }) {
           <span style={{ fontSize: 15, fontWeight: 700 }}>{title} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{msgs.length} messages</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
-        <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-          {(["all", "mentions", "dms"] as const).map(f => <Tab key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab>)}
+        {fu.has("focus") || fu.has("ranges") || fu.gated ? <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
+          {fu.has("focus") ? (["all", "mentions", "dms"] as const).map(f => <Tab key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab>) : null}
           <span style={{ flex: 1 }} />
-          {(["today", "3_days", "week", "2_weeks"] as const).map(r => <Tab key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL[r]}</Tab>)}
-        </div>
+          {fu.has("ranges") ? (["today", "3_days", "week", "2_weeks"] as const).map(r => <Tab key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL[r]}</Tab>) : null}
+          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
+        </div> : null}
         {!groups.length ? <div style={{ ...muted, padding: 8 }}>{focus === "mentions" ? "No mentions" : focus === "dms" ? "No direct messages" : "Nothing"} {(RANGE_LABEL[range] ?? range).toLowerCase()}.</div> : null}
         {groups.map(([id, items]) => {
           const c = convOf(id);
@@ -217,8 +220,8 @@ function InboxView({ ctx, note }: { ctx: UiCtx; note?: string }) {
                 <span style={{ fontSize: 13, fontWeight: 700 }}>{c ? convLabel(c) : `#${items[0].channelName}`} <span style={{ ...muted, fontWeight: 400 }}>{parents.length}</span>{items.some(m => m.mentionsMe) ? <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "white", background: v("danger"), borderRadius: 8, padding: "1px 6px" }}>@</span> : null}</span>
                 <span style={{ ...muted, fontSize: 12 }}>{open ? "Collapse" : parents.length > 2 ? `${parents.length - 2} more ›` : "Open ›"}</span>
               </button>
-              {shown.map(m => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={repliesOf.get(m.ts)} compact convOf={convOf} />)}
-              {open ? <div style={{ padding: "4px 8px 2px" }}><ComposeBox placeholder={`Message ${c ? convLabel(c) : tgt}`} onSend={async text => { await ctx.send(`Post in ${tgt}:\n${text}`); }} /></div> : null}
+              {shown.map(m => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={repliesOf.get(m.ts)} compact convOf={convOf} can={fu.has} />)}
+              {open && fu.has("compose") ? <div style={{ padding: "4px 8px 2px" }}><ComposeBox placeholder={`Message ${c ? convLabel(c) : tgt}`} onSend={async text => { await ctx.send(`Post in ${tgt}:\n${text}`); }} /></div> : null}
             </div>
           );
         })}

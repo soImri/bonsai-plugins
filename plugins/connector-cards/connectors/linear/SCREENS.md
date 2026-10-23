@@ -14,6 +14,16 @@
 
 **Jev picks (view):** scope (open/active/done/all), view, groupBy, sort, then description/assignee/labels/dates fields. **Jev picks (draft):** priority, project, up to five labels, state, assign-to-me.
 
+**Follow-ups (Jev picks up to three per card; `More` reveals the rest):**
+
+| Screen | Primary surface | Follow-up candidates (`when`) |
+| --- | --- | --- |
+| Issue | identifier, title, description, properties as pills, open-in-Linear | `status` (progress, done, start) · `priority` (triage, urgency) · `comment` (respond, feedback, a question on it; always when a draft is passed) · `assignee` (who owns it, hand-off) · `labels` (categorising, bug/feature) · `project` (planning across projects) |
+| List / board / project | the rows (expand in place), scope label | `edit` (inline priority/status pickers: triage, planning, review) · `scopes` (open / in progress / done / all) · `views` (list / board / project tabs) · `group` (regroup a board) · `create` (+ New issue inline) |
+| Create | title, description, Jev-picked properties as pills | `priority` · `project` · `labels` · `assignee` · `state` (the picked ones become pickers) |
+
+A bare "show NEAT-9" is the issue with plain pills and More; "show NEAT-9" while triaging gets the priority picker; while answering Seb gets the comment box.
+
 **Card messages:** `Save NEAT-10: status → …; labels → …` · `Comment on NEAT-10:` + body · `Create in NEAT: <title>` + properties line + optional `Description:` block · `Show NEAT-7`.
 
 **Not built:** sub-issues, relations, cycles, attachments, assignee pickers with avatars, inline description editing.

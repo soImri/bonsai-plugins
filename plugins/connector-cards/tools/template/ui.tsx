@@ -3,7 +3,7 @@
  * own screens (see SCREENS.md), never a form of fields. Edits batch behind Save.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ErrorCard, LongText, OpenExternal, Placeholder, SaveBar, bare, card, footer, hoverable, muted, pad, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
+import { Button, ErrorCard, LongText, MoreChip, OpenExternal, Placeholder, SaveBar, bare, card, footer, hoverable, muted, pad, useFollowUps, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
 
 type Rec = { ref: string; title: string; subtitle?: string; body?: string; url?: string; fields: { [k: string]: string | number | boolean | null } };
 
@@ -17,6 +17,8 @@ function RecordCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const [title, setTitle] = useState(seed);
   const [saving, setSaving] = useState(false);
   useEffect(() => setTitle(seed), [seed]);
+  // The follow-ups Jev picked: the primary surface shows always; a control shows when `fu.has(id)`; More reveals the rest.
+  const fu = useFollowUps(ctx.details?.followUps ?? ctx.details?.composition?.followUps, rec);
   if (!rec) return <Placeholder text="No record data." />;
   const changes = title !== rec.title ? [`title → ${title}`] : [];
   async function save() { setSaving(true); await ctx.send(saveLine(rec!.ref, changes)); setSaving(false); }
@@ -25,9 +27,9 @@ function RecordCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
       <div style={pad}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ ...muted, fontSize: 12 }}>{rec.ref}</span>
-          {rec.url ? <OpenExternal url={rec.url} title="Open in __LABEL__" onOpen={ctx.openUrl} /> : null}
+          <span style={{ display: "inline-flex", gap: 6 }}>{fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}{rec.url ? <OpenExternal url={rec.url} title="Open in __LABEL__" onOpen={ctx.openUrl} /> : null}</span>
         </div>
-        <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => setTitle(e.target.value)} aria-label="Title" />
+        {fu.has("title") ? <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => setTitle(e.target.value)} aria-label="Title" /> : <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{rec.title}</h2>}
         {rec.subtitle ? <div style={muted}>{rec.subtitle}</div> : null}
         {rec.body ? <LongText md={rec.body} /> : null}
       </div>

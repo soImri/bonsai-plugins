@@ -4,9 +4,12 @@
 // Two kinds of case live in connectors/<id>/evals.json:
 //   { "parse": "<a card message>", "expect": { ...the parsed request... } }
 //     Runs the connector's write.ts parser in this process. No network, no Bonsai.
-//   { "ask": "<what the person said>", "tool": "view|record|draft", "args": { ... }, "expect": { ...fields of the result's details... } }
+//   { "ask": "<what the person said>", "tool": "view|record|draft", "args": { ... }, "expect": { ...fields of the result's details... },
+//     "includes": { "composition.followUps": ["edit"] }, "excludes": { "composition.followUps": ["create"] } }
 //     Invokes the plugin's tool through the Bonsai CLI in a session (no model turn), then compares
-//     `expect` against the result's details with dotted paths ("composition.view": "list").
+//     `expect` against the result's details with dotted paths ("composition.view": "list"); `includes` and
+//     `excludes` check membership in an array at the path (the follow-ups a card must and must not offer).
+//     Put the conversation around the ask in args.context: follow-ups are judged from it.
 //     Needs the `kay` CLI and a session: inside an agent Bash both are set ($KAY_CLI_NAME, $KAY_SESSION_ID);
 //     from a terminal pass --session <id> and have `kay` on PATH.
 //
@@ -56,7 +59,9 @@ if (liveCases.length && only !== "parse") {
     const text = env?.result?.content?.[0]?.text ?? "";
     if (details.error) { report(false, `live   ${c.ask}`, `tool error: ${details.error}`); continue; }
     const diffs = Object.entries(c.expect ?? {}).filter(([k, want]) => !same(get(details, k), want)).map(([k, want]) => `${k}: got ${JSON.stringify(get(details, k))}, want ${JSON.stringify(want)}`);
-    report(diffs.length === 0, `live   ${c.ask}  (${took} ms; ${text.match(/routed by \w+/)?.[0] ?? ""}; ${details.timing ? Object.entries(details.timing).map(([k, v]) => `${k} ${v}`).join(", ") : ""})`, diffs.join("; "));
+    for (const [k, want] of Object.entries(c.includes ?? {})) { const got = get(details, k) ?? []; for (const w of want) if (!got.includes(w)) diffs.push(`${k}: should include ${JSON.stringify(w)}, got ${JSON.stringify(got)}`); }
+    for (const [k, want] of Object.entries(c.excludes ?? {})) { const got = get(details, k) ?? []; for (const w of want) if (got.includes(w)) diffs.push(`${k}: should not include ${JSON.stringify(w)}, got ${JSON.stringify(got)}`); }
+    report(diffs.length === 0, `live   ${c.ask}${c.args?.context ? ` [ctx: ${c.args.context}]` : ""}  (${took} ms; ${text.match(/routed by \w+/)?.[0] ?? ""}; ${details.timing ? Object.entries(details.timing).map(([k, v]) => `${k} ${v}`).join(", ") : ""})`, diffs.join("; "));
   }
 }
 

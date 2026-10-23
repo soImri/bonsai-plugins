@@ -8,7 +8,7 @@
  */
 import { HttpError, defineConnector, classify, ms, type Run, type CardResult } from "../../runtime.ts";
 import { getRecord, listRecords, type Record } from "./api.ts";
-import { viewRubric, type Composition } from "./rubrics.ts";
+import { listFollowUps, recordFollowUps, viewRubric, type Composition } from "./rubrics.ts";
 import { parseCardMessage } from "./write.ts";
 
 /** TODO: how this app's record references look in text, e.g. /\b[A-Z]+-\d+\b/ or /#[0-9a-f]{6}/. */
@@ -34,22 +34,30 @@ export const __ID__ = defineConnector({
   filters: {},
   explain: (err) => (err instanceof HttpError && (err.status === 401 || err.status === 403) ? `__LABEL__ rejected Bonsai's sign-in (HTTP ${err.status}). Reconnect it in App Store → Installed.` : undefined),
 
-  async view({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
+  async view({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
     const records = await listRecords(token, cache, { query: params.query, ...(params.filters ?? {}) }, signal);
     const tApp = ms(startedAt);
     const rubric = viewRubric(params.task ?? "", records);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
-    const { value, took: tJev } = await jev({ purpose: "__ID__-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess);
+    // Composition and follow-ups: two Jev calls in parallel (same wall time).
+    const [{ value, took: tJev }, fu] = await Promise.all([
+      jev({ purpose: "__ID__-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess),
+      followUps("__ID__-follow-ups", { task: params.task, recordCount: records.length }, records.length === 1 ? recordFollowUps(params.task ?? "") : listFollowUps(params.task ?? "")),
+    ]);
     const comp = value as Composition;
+    comp.followUps = fu.actions;
     const payload = { kind: "view", task: params.task, records, composition: comp, timing: { __ID__: tApp, jev: tJev } };
     const picked = `${comp.view} view`;
-    if (!records.length) return { summary: "No records match. Say so in one line.", payload, picked };
-    return { summary: `Showing ${records.length} __LABEL__ record(s) as a ${comp.view} view (${comp.by === "jev" ? `Jev picked, ${comp.variant}` : "default pick"}; __LABEL__ ${tApp}, Jev ${tJev}). The card is the answer: reply with one short line or nothing.`, payload, picked };
+    if (!records.length) return { summary: "No records match. Say so in one line.", payload, picked, offered: fu.actions };
+    return { summary: `Showing ${records.length} __LABEL__ record(s) as a ${comp.view} view (${comp.by === "jev" ? `Jev picked, ${comp.variant}` : "default pick"}; __LABEL__ ${tApp}, Jev ${tJev}). The card is the answer: reply with one short line or nothing.`, payload, picked, offered: fu.actions };
   },
 
-  async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
+  async record({ token, params, signal, startedAt, cache, followUps, context }: Run): Promise<CardResult> {
     const rec = await getRecord(token, cache, String(params.ref ?? ""), signal);
     if (!rec) throw new Error(`No __LABEL__ record matches "${params.ref}".`);
+    const fu = await followUps("__ID__-follow-ups", { task: params.ref, record: rec.title }, recordFollowUps(`${params.ref} ${context ?? ""}`));
+    // TODO: put `followUps: fu.actions` on the payload and return `offered: fu.actions`; in apply, return `used`.
+    void fu;
     return { summary: `Showing "${rec.title}" as a __LABEL__ card (__LABEL__ ${ms(startedAt)}). The card is the answer: reply with one short line or nothing.`, payload: { kind: "record", record: rec, timing: { __ID__: ms(startedAt) } } };
   },
 

@@ -6,15 +6,15 @@
  * (saveLine, createMessage, rsvp, delete) and the parser in step.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ClockGlyph, ErrorCard, LongText, NotesGlyph, OpenExternal, PinGlyph, Picker, Placeholder, SaveBar, Timing, UserGlyph, VideoGlyph, bare, card, footer, hoverable, muted, pad, row, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
+import { Button, ClockGlyph, ErrorCard, LongText, NotesGlyph, OpenExternal, PinGlyph, Picker, Placeholder, SaveBar, Timing, UserGlyph, VideoGlyph, bare, card, footer, hoverable, muted, pad, row, v, type ConnectorUi, type UiCtx, MoreChip, useFollowUps } from "../../ui/kit.tsx";
 
 type Attendee = { email: string; name?: string; response: string; self?: boolean; organizer?: boolean; optional?: boolean };
 type Event = { key: string; id: string; calendar: string; calendarName: string; title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees: Attendee[]; organizer?: string; meet?: string; link?: string; myResponse?: string; color?: string; recurring?: boolean };
 type Cal = { id: string; name: string; color?: string; writable?: boolean; primary?: boolean };
-type Composition = { view: "agenda" | "event" | "month" | "free"; range: string; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly?: boolean }; by: "jev" | "fallback" };
+type Composition = { view: "agenda" | "event" | "month" | "free"; range: string; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly?: boolean; followUps?: string[] }; by: "jev" | "fallback" };
 type FreeDay = { date: string; weekday: string; busy: { start: string; end: string; title?: string }[]; free: { start: string; end: string }[] };
 type Slot = { date: string; weekday: string; start: string; end: string };
-type Draft = { title: string; description?: string; start: string; end: string; allDay: boolean; attendees: string[]; location?: string; meet: boolean; calendar?: string; calendarName?: string; timeZone: string };
+type Draft = { title: string; description?: string; start: string; end: string; allDay: boolean; attendees: string[]; location?: string; meet: boolean; calendar?: string; calendarName?: string; timeZone: string; followUps?: string[] };
 type Edit = { title: string; start: string; end: string; location: string; guests: string };
 
 const TIMING = { google: "Google", jev: "Jev" };
@@ -66,9 +66,11 @@ function Guests({ attendees, editing, value, onChange }: { attendees: Attendee[]
 }
 
 /* ---------- EventCard: Google Calendar's event popup ---------- */
-function EventCard({ ctx, event: given, note }: { ctx: UiCtx; event?: Event; note?: string }) {
+function EventCard({ ctx, event: given, note, followUps: givenFu }: { ctx: UiCtx; event?: Event; note?: string; followUps?: string[] }) {
   const tz: string = ctx.details?.timeZone ?? "UTC";
   const event: Event | undefined = given ?? ctx.details?.event;
+  const offered: string[] | undefined = givenFu ?? (Array.isArray(ctx.details?.followUps) ? ctx.details.followUps : Array.isArray(ctx.details?.composition?.followUps) ? ctx.details.composition.followUps : undefined);
+  const fu = useFollowUps(offered, event);
   const seed = useMemo<Edit>(() => ({ title: event?.title ?? "", start: wallOf(event?.start, tz), end: wallOf(event?.end, tz), location: event?.location ?? "", guests: (event?.attendees ?? []).map(a => a.email).join(", ") }), [event]);
   const [saved, setSaved] = useState<Edit>(seed);
   const [cur, setCur] = useState<Edit>(seed);
@@ -90,30 +92,33 @@ function EventCard({ ctx, event: given, note }: { ctx: UiCtx; event?: Event; not
   const [sd, st] = cur.start.split(" "); const [ed, et] = cur.end.split(" ");
   const sameDay = sd === ed;
   const f = (ctx.details?.composition?.fields ?? {}) as Partial<Composition["fields"]>;
-  const open = () => setEditing(true);
+  const canEdit = fu.has("reschedule") || fu.has("guests") || fu.has("details");
+  const open = () => { if (canEdit) setEditing(true); };
+  const edTime = editing && fu.has("reschedule"), edGuests = editing && fu.has("guests"), edDetails = editing && fu.has("details");
   return (
     <section style={card}>
       <div style={pad}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <span style={{ marginTop: 5 }}><Dot color={event.color} /></span>
-          {editing ? <input style={{ ...bare, fontSize: 17, fontWeight: 500 }} value={cur.title} onChange={e => setCur({ ...cur, title: e.target.value })} aria-label="Title" /> : <h2 onClick={open} title="Click to edit" style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 500, lineHeight: 1.3, cursor: "text" }}>{event.title}</h2>}
+          {edDetails ? <input style={{ ...bare, fontSize: 17, fontWeight: 500 }} value={cur.title} onChange={e => setCur({ ...cur, title: e.target.value })} aria-label="Title" /> : <h2 onClick={fu.has("details") ? open : undefined} title={fu.has("details") ? "Click to edit" : undefined} style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 500, lineHeight: 1.3, cursor: fu.has("details") ? "text" : "default" }}>{event.title}</h2>}
+          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
           {event.link ? <OpenExternal url={event.link} title="Open in Google Calendar" onOpen={ctx.openUrl} /> : null}
         </div>
         <Line glyph={<ClockGlyph />}>
-          {editing && !event.allDay ? (
+          {edTime && !event.allDay ? (
             <div style={{ ...row, gap: 6 }}>
               <input type="date" style={inputStyle} value={sd} onChange={e => setCur({ ...cur, start: `${e.target.value} ${st}`, end: sameDay ? `${e.target.value} ${et}` : cur.end })} aria-label="Date" />
               <input type="time" style={inputStyle} value={st} onChange={e => setCur({ ...cur, start: `${sd} ${e.target.value}` })} aria-label="Start time" />
               <span style={muted}>–</span>
               <input type="time" style={inputStyle} value={et} onChange={e => setCur({ ...cur, end: `${ed} ${e.target.value}` })} aria-label="End time" />
             </div>
-          ) : <span onClick={open} style={{ cursor: "text" }}>{fmtDay(wallOf(event.start, tz), true)}{event.allDay ? " · All day" : ` · ${timeRange(event, tz)}`}{event.recurring ? <span style={muted}> · Repeats</span> : null}</span>}
+          ) : <span onClick={fu.has("reschedule") ? open : undefined} style={{ cursor: fu.has("reschedule") ? "text" : "default" }}>{fmtDay(wallOf(event.start, tz), true)}{event.allDay ? " · All day" : ` · ${timeRange(event, tz)}`}{event.recurring ? <span style={muted}> · Repeats</span> : null}</span>}
         </Line>
-        {(f.location !== false || editing || event.location) ? <Line glyph={<PinGlyph />}>{editing ? <input style={{ ...inputStyle, width: "100%" }} value={cur.location} onChange={e => setCur({ ...cur, location: e.target.value })} placeholder="Add location" aria-label="Location" /> : <span onClick={open} style={{ cursor: "text", ...(event.location ? {} : muted) }}>{event.location || "Add location"}</span>}</Line> : null}
+        {(edDetails || event.location || (f.location !== false && fu.has("details"))) ? <Line glyph={<PinGlyph />}>{edDetails ? <input style={{ ...inputStyle, width: "100%" }} value={cur.location} onChange={e => setCur({ ...cur, location: e.target.value })} placeholder="Add location" aria-label="Location" /> : <span onClick={fu.has("details") ? open : undefined} style={{ cursor: fu.has("details") ? "text" : "default", ...(event.location ? {} : muted) }}>{event.location || "Add location"}</span>}</Line> : null}
         {event.meet ? <Line glyph={<VideoGlyph />}><Button variant="primary" size="sm" onClick={() => ctx.openUrl(event.meet!)}>Join with Google Meet</Button></Line> : null}
-        {(f.attendees !== false || editing || event.attendees.length) ? <Line glyph={<UserGlyph />}><Guests attendees={event.attendees} editing={editing} value={cur.guests} onChange={s => setCur({ ...cur, guests: s })} /></Line> : null}
+        {(edGuests || event.attendees.length || (f.attendees !== false && fu.has("guests"))) ? <Line glyph={<UserGlyph />}><Guests attendees={event.attendees} editing={edGuests} value={cur.guests} onChange={s => setCur({ ...cur, guests: s })} /></Line> : null}
         {event.description && f.description !== false ? <Line glyph={<NotesGlyph />}><LongText md={event.description} /></Line> : null}
-        {event.myResponse && !editing ? (
+        {event.myResponse && !editing && fu.has("rsvp") ? (
           <div style={{ ...row, fontSize: 13, paddingTop: 4, borderTop: `1px solid ${v("border")}` }}>
             <span style={muted}>Going?</span>
             {(["yes", "no", "maybe"] as const).map(a => { const mine = (a === "yes" && event.myResponse === "accepted") || (a === "no" && event.myResponse === "declined") || (a === "maybe" && event.myResponse === "tentative"); return <Button key={a} variant={mine ? "primary" : "secondary"} size="sm" disabled={rsvping !== null} onClick={() => rsvp(a)}>{rsvping === a ? "…" : a[0].toUpperCase() + a.slice(1)}</Button>; })}
@@ -332,7 +337,7 @@ function EventRow({ e, tz, open, onToggle, ctx, fields }: { e: Event; tz: string
         {e.myResponse === "needsAction" ? <span style={{ fontSize: 10, fontWeight: 600, color: v("warning") }}>RSVP</span> : null}
         {e.meet ? <span style={{ ...muted, display: "inline-flex" }}><VideoGlyph /></span> : null}
       </button>
-      {open ? <div style={{ margin: "2px 0 8px 28px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: e } }} event={e} /></div> : null}
+      {open ? <div style={{ margin: "2px 0 8px 28px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: e } }} event={e} followUps={["rsvp", "reschedule"]} /></div> : null}
     </div>
   );
 }
@@ -376,16 +381,25 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const [mode, setMode] = useState<"agenda" | "month" | "free">(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda");
   const [monthIx, setMonthIx] = useState(comp.range === "next_month" ? 1 : 0);
   const [openKey, setOpenKey] = useState<string | null>(null);
-  useEffect(() => { setRange(initialRange); setMode(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda"); setMonthIx(comp.range === "next_month" ? 1 : 0); setOpenKey(null); }, [d]);
+  const [creating, setCreating] = useState(false);
+  const fu = useFollowUps(comp.followUps, d);
+  useEffect(() => { setRange(initialRange); setMode(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda"); setMonthIx(comp.range === "next_month" ? 1 : 0); setOpenKey(null); setCreating(false); }, [d]);
+  const writable: Cal[] = (Array.isArray(d.calendars) ? d.calendars : []).filter((c: Cal) => c.writable);
+  const nextSlot = (() => { const t = new Date(Math.ceil((Date.now() + 5 * 60e3) / (30 * 60e3)) * 30 * 60e3); const w = (x: Date) => wallOf(x.toISOString(), tz); return { start: w(t), end: w(new Date(t.getTime() + 30 * 60e3)) }; })();
+  const creator = creating && writable.length ? <NewEventCard ctx={{ ...ctx, details: { kind: "draft", calendars: writable, draft: { title: "", start: nextSlot.start, end: nextSlot.end, allDay: false, attendees: [], meet: false, calendar: (writable.find((c: Cal) => c.primary) ?? writable[0]).id, followUps: ["guests", "meet"] } } }} onBack={() => setCreating(false)} backLabel="‹ Back" /> : null;
   const t0 = d.timing as Record<string, string> | undefined;
   const caption = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : "");
   const fields = comp.fields;
-  const chips = (
+  const anyChip = fu.has("ranges") || fu.has("find") || fu.has("create") || fu.gated;
+  const chips = anyChip ? (
     <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-      {CHIPS.map(([k, label]) => <Tab key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : (mode === "agenda" && range === k))} onClick={() => { setOpenKey(null); if (k === "this_month") { setMode("month"); setMonthIx(0); } else { setMode("agenda"); setRange(k); } }}>{label}</Tab>)}
-      <Tab on={mode === "free"} onClick={() => { setOpenKey(null); setMode("free"); }}>Find a time</Tab>
+      {fu.has("ranges") ? CHIPS.map(([k, label]) => <Tab key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : (mode === "agenda" && range === k))} onClick={() => { setOpenKey(null); if (k === "this_month") { setMode("month"); setMonthIx(0); } else { setMode("agenda"); setRange(k); } }}>{label}</Tab>) : null}
+      {fu.has("find") ? <Tab on={mode === "free"} onClick={() => { setOpenKey(null); setMode("free"); }}>Find a time</Tab> : null}
+      {fu.has("create") && writable.length && mode !== "free" ? <Tab on={creating} onClick={() => setCreating(c => !c)}>+ New event</Tab> : null}
+      <span style={{ flex: 1 }} />
+      {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
     </div>
-  );
+  ) : null;
   if (mode === "free") {
     const free = d.free ?? freeFromEvents(all, tz, now, 30);
     const cals = (Array.isArray(d.calendars) ? d.calendars : []).filter((c: Cal) => c.writable);
@@ -398,6 +412,7 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
       <section style={{ ...card, maxWidth: 760 }}>
         <div style={{ ...pad, gap: 8 }}>
           {chips}
+          {creator}
           <MonthGrid ctx={ctx} caption={caption} month={m} events={inGrid} canPrev={monthIx > 0} canNext={monthIx + 1 < months.length} onPrev={() => setMonthIx(i => i - 1)} onNext={() => setMonthIx(i => i + 1)} />
         </div>
       </section>
@@ -420,6 +435,7 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
         {chips}
+        {creator}
         {!events.length ? <div style={{ ...muted, padding: "10px 8px 4px" }}>{range === "invites" ? "No unanswered invitations." : `Nothing scheduled ${label.toLowerCase()}.`}</div> : null}
         {[...days.entries()].map(([day, items]) => (
           <div key={day} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${v("border")}` }}>
@@ -438,8 +454,9 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
 }
 
 /* ---------- NewEventCard: Google Calendar's create dialog ---------- */
-function NewEventCard({ ctx, onBack }: { ctx: UiCtx; onBack?: () => void }) {
+function NewEventCard({ ctx, onBack, backLabel }: { ctx: UiCtx; onBack?: () => void; backLabel?: string }) {
   const draft: Draft | undefined = ctx.details?.draft;
+  const fu = useFollowUps(draft?.followUps, draft);
   const calendars: Cal[] = Array.isArray(ctx.details?.calendars) ? ctx.details.calendars : [];
   const seed = useMemo(() => ({ title: draft?.title ?? "", start: draft?.start ?? "", end: draft?.end ?? "", allDay: Boolean(draft?.allDay), guests: (draft?.attendees ?? []).join(", "), location: draft?.location ?? "", meet: Boolean(draft?.meet), notes: draft?.description ?? "", calendar: calendars.find(c => c.id === draft?.calendar) ?? calendars.find(c => c.primary) ?? calendars[0] }), [draft]);
   const [s, setS] = useState(seed);
@@ -453,7 +470,10 @@ function NewEventCard({ ctx, onBack }: { ctx: UiCtx; onBack?: () => void }) {
   return (
     <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
-        {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>‹ Find a time</button> : null}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>{backLabel ?? "‹ Find a time"}</button> : <span />}
+          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
+        </div>
         <input style={{ ...bare, fontSize: 18, fontWeight: 500, borderBottom: `1px solid ${v("border")}`, paddingBottom: 6 }} value={s.title} onChange={e => set({ title: e.target.value })} placeholder="Add title" aria-label="Title" disabled={sent} />
         <Line glyph={<ClockGlyph />}>
           <div style={{ ...row, gap: 6 }}>
@@ -462,11 +482,11 @@ function NewEventCard({ ctx, onBack }: { ctx: UiCtx; onBack?: () => void }) {
             <label style={{ ...muted, display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, marginLeft: 4 }}><input type="checkbox" checked={s.allDay} onChange={e => set({ allDay: e.target.checked })} disabled={sent} />All day</label>
           </div>
         </Line>
-        <Line glyph={<UserGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.guests} onChange={e => set({ guests: e.target.value })} placeholder="Add guests (emails, comma-separated)" aria-label="Guests" disabled={sent} /></Line>
-        <Line glyph={<VideoGlyph />}><label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}><input type="checkbox" checked={s.meet} onChange={e => set({ meet: e.target.checked })} disabled={sent} />Add Google Meet video conferencing</label></Line>
-        <Line glyph={<PinGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.location} onChange={e => set({ location: e.target.value })} placeholder="Add location" aria-label="Location" disabled={sent} /></Line>
-        <Line glyph={<NotesGlyph />}><textarea style={{ ...bare, lineHeight: "20px", fontSize: 13 }} rows={2} value={s.notes} onChange={e => set({ notes: e.target.value })} placeholder="Add description" aria-label="Description" disabled={sent} /></Line>
-        {calendars.length > 1 ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={c => set({ calendar: c })} label="Calendar" lead={c => <Dot color={c?.color} />} keyOf={c => c.id} labelOf={c => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
+        {fu.has("guests") || s.guests ? <Line glyph={<UserGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.guests} onChange={e => set({ guests: e.target.value })} placeholder="Add guests (emails, comma-separated)" aria-label="Guests" disabled={sent} /></Line> : null}
+        {fu.has("meet") || s.meet ? <Line glyph={<VideoGlyph />}><label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}><input type="checkbox" checked={s.meet} onChange={e => set({ meet: e.target.checked })} disabled={sent} />Add Google Meet video conferencing</label></Line> : null}
+        {fu.has("location") || s.location ? <Line glyph={<PinGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.location} onChange={e => set({ location: e.target.value })} placeholder="Add location" aria-label="Location" disabled={sent} /></Line> : null}
+        {fu.has("notes") || s.notes ? <Line glyph={<NotesGlyph />}><textarea style={{ ...bare, lineHeight: "20px", fontSize: 13 }} rows={2} value={s.notes} onChange={e => set({ notes: e.target.value })} placeholder="Add description" aria-label="Description" disabled={sent} /></Line> : null}
+        {calendars.length > 1 && fu.has("calendar") ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={c => set({ calendar: c })} label="Calendar" lead={c => <Dot color={c?.color} />} keyOf={c => c.id} labelOf={c => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
       </div>
       <div style={footer}>
         <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar…" : ""}</span>

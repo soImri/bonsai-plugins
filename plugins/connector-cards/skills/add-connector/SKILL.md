@@ -25,6 +25,14 @@ Pick the three to five screens people have muscle memory for in the app. Two sou
 
 Every card mimics the app's UI, never a form of fields. Edits batch behind Save; no write per pill click.
 
+## 2b. Follow-ups: primary surface plus the next click
+
+For every screen in the map, write two lists: the **primary surface** (what the ask itself needs on screen) and the **follow-ups** (the few controls that save the person their next message). Keep the candidates to eight per screen, each with `id`, a `label` in the person's terms ("change its priority"), `when` (the situations that make it likely: words in the ask, the conversation, what the person did after similar asks), an optional `unless`, and a heuristic `guess` for when Jev is unavailable. Mark `always: true` only for a control without which the screen makes no sense (Use this time on a find-a-time view).
+
+In `rubrics.ts` export them as `FollowUp[]` factories (`issueFollowUps(task, issue)`, `listFollowUps(task, comp, n)`, `draftFollowUps(task, picks, meta)`). In `index.ts` call `run.followUps(purpose, state, candidates)` in a `Promise.all` beside the composition classify, put the ids on the payload (`composition.followUps` for views, `followUps` for records, `draft.followUps` for drafts) and return them as `offered`. In `apply`, return `used` (the ids the message exercised) and set `composition.followUps = used` so the redrawn card keeps those controls open. In `ui.tsx`, `const fu = useFollowUps(ids, resetKey)`; gate each secondary control with `fu.has("id")`, draw a property that is shown but not picked with `Picker readOnly`, and put `<MoreChip on={fu.more} onClick={fu.toggle} />` where the controls live. A card with no picked follow-ups is the primary surface plus More.
+
+The test: for each screen, three asks with different `context` lines must produce three different sets of controls, and none of them should show a control the ask gives no reason for.
+
 ## 3. Scaffold
 
 `node tools/new-connector.mjs <id> "<Label>" <serviceId> <schemeId>` creates `connectors/<id>/{index.ts, api.ts, rubrics.ts, write.ts, ui.tsx, SCREENS.md, evals.json}` from the template, registers the id in `connectors/index.ts` and `connectors/ui.ts`, and adds the auth entry to the manifest. Fill in the TODOs; the template's comments say what each export is for.
@@ -44,6 +52,10 @@ Every card mimics the app's UI, never a form of fields. Edits batch behind Save;
 ## 6. Test like a person
 
 Build the UI (`node tools/build-ui.mjs`), then commit: a git commit in the plugin directory reloads the plugin (touching files or toggling the install does not). Subagents keep the parent's plugin generation, so test in fresh top-level sessions: `open_session` with a first message, then read its transcript for the tool call, its arguments, the result line and the timing. Check: one tool call and no reads before it; the connector routed as expected; the composition and fields Jev picked; the card's message round-trips through `cards_apply`. Then look at the cards yourself: the agent cannot see them, so never report a card as fixed from the transcript alone.
+
+## 5b. Follow-up evals
+
+Add live cases with `args.context` and `includes` / `excludes` on the follow-up path: `{ "ask": "NEAT-9", "tool": "record", "args": { "ref": "NEAT-9", "context": "triaging before Friday's review" }, "includes": { "followUps": ["priority"] }, "excludes": { "followUps": ["project"] } }`. Cover: the bare ask (few or no follow-ups), one context that should add a specific control, one that should not.
 
 ## 7. Log picks for the loop
 

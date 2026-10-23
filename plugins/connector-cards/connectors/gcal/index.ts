@@ -11,6 +11,7 @@
 import { HttpError, defineConnector, classify, ms, type Run, type CardResult } from "../../runtime.ts";
 import { createEvent, deleteEvent, freeBusy, getEvent, listEvents, mergeAttendees, patchEvent, readMeta, rememberKeys, resolveKey, rsvp, type Busy, type Calendar, type Event, type EventBody } from "./api.ts";
 import { RANGE_LABEL, createRubric, dayBounds, dayStart, monthGrid, rangeBounds, toGoogleTime, tzParts, viewRubric, wall, type Composition, type Picks, type Range } from "./rubrics.ts";
+import { agendaFollowUps, draftFollowUps, eventFollowUps } from "./rubrics.ts";
 import { parseCardMessage, type EventChange, type EventCreate } from "./write.ts";
 
 const KEY = /#[0-9a-f]{6}\b/i;
@@ -136,7 +137,7 @@ export const gcal = defineConnector({
   filters: { calendar: "a calendar's name, to look at one calendar only", date: "one day, YYYY-MM-DD, when the ask names a specific date" },
   explain: (err) => (err instanceof HttpError ? (err.status === 401 ? "Google rejected Bonsai's sign-in (HTTP 401). Reconnect Google in App Store → Installed → Google Calendar → Connections." : err.status === 403 ? "Google refused (HTTP 403): the connected Google account has not granted calendar access to Bonsai. Reconnect Google Calendar in App Store → Installed." : undefined) : undefined),
 
-  async view({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
+  async view({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
     const meta = await readMeta(token, cache, signal);
     const tz = meta.timeZone;
     const now = new Date();
@@ -162,8 +163,13 @@ export const gcal = defineConnector({
     const tGoogle = ms(startedAt);
     const rubric = viewRubric(task, all, tz, now);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
-    const { value, took: tJev } = await jev({ purpose: "gcal-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess);
+    const g0 = rubric.guess;
+    const [{ value, took: tJev }, fu] = await Promise.all([
+      jev({ purpose: "gcal-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess),
+      followUps("gcal-follow-ups", { task, shape: refs.length === 1 || all.length === 1 ? "event" : g0.view, eventCount: all.length }, refs.length === 1 || all.length === 1 ? eventFollowUps(task, all[0] ?? {}) : agendaFollowUps(task, g0.view, all)),
+    ]);
     const comp = value as Composition;
+    comp.followUps = fu.actions;
     if (date) comp.range = "day";
     // Jev chose a month the heuristic did not fetch for: fetch the grid now (rare, one more round trip).
     const isMonth = comp.range === "this_month" || comp.range === "next_month";
@@ -199,19 +205,20 @@ export const gcal = defineConnector({
     const picked = `${comp.view}, range ${comp.range}${comp.fields.attendees ? ", with guests" : ""}${comp.fields.location ? ", with locations" : ""}${comp.fields.invitesOnly ? ", invites only" : ""}`;
     const viewName = comp.view === "event" ? "an event card" : comp.view === "month" ? "a month grid" : comp.view === "free" ? "a find-a-time view" : "an agenda";
     void who; void viewName;
-    if (!events.length && comp.view !== "free") return { summary: `No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${rangeLabel.toLowerCase()}; the card says so and offers other ranges. Reply with nothing.`, payload, picked };
-    return { summary: `Card shown (${comp.view === "free" ? "find a time" : `${events.length} event${events.length === 1 ? "" : "s"}, ${rangeLabel}`}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked };
+    if (!events.length && comp.view !== "free") return { summary: `No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${rangeLabel.toLowerCase()}; the card says so and offers other ranges. Reply with nothing.`, payload, picked, offered: fu.actions };
+    return { summary: `Card shown (${comp.view === "free" ? "find a time" : `${events.length} event${events.length === 1 ? "" : "s"}, ${rangeLabel}`}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions };
   },
 
-  async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
+  async record({ token, params, signal, startedAt, cache, followUps, context }: Run): Promise<CardResult> {
     const meta = await readMeta(token, cache, signal);
     const ev = await eventByRef(token, cache, meta.calendars, String(params.ref ?? ""), signal);
     if (!ev) throw new Error(`No event matches "${params.ref}" in the next two weeks.`);
     await rememberKeys(cache, [ev]);
-    return { summary: `Card shown ("${ev.title}"). Reply with nothing.`, payload: { kind: "event", timeZone: meta.timeZone, event: ev, calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), timing: { google: ms(startedAt) } } };
+    const fu = await followUps("gcal-follow-ups", { task: params.ref, event: { title: ev.title, start: ev.start, myResponse: ev.myResponse ?? "own", guests: ev.attendees.length } }, eventFollowUps(`${params.ref} ${context ?? ""}`, ev));
+    return { summary: `Card shown ("${ev.title}"). Reply with nothing.`, picked: `event${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions, payload: { kind: "event", followUps: fu.actions, timeZone: meta.timeZone, event: ev, calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), timing: { google: ms(startedAt) } } };
   },
 
-  async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
+  async draft({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
     const meta = await readMeta(token, cache, signal);
     const tz = meta.timeZone;
     const tGoogle = ms(startedAt);
@@ -220,18 +227,21 @@ export const gcal = defineConnector({
     const attendees: string[] = Array.isArray(f.attendees) ? f.attendees : typeof f.attendees === "string" ? f.attendees.split(/[,;]\s*/).filter(Boolean) : [];
     const rubric = createRubric(params.task ?? "", title, Boolean(f.end), attendees, meta.calendars);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
-    const { value: picks, took: tJev } = await jev({ purpose: "gcal-new-event" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, rubric.guess) as { value: Picks; took: string };
+    const [{ value: picks, took: tJev }, fu] = await Promise.all([
+      jev({ purpose: "gcal-new-event" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, rubric.guess) as Promise<{ value: ReturnType<typeof rubric.guess>; took: string }>,
+      followUps("gcal-follow-ups", { task: params.task, title, guests: attendees.join(", ") || "none" }, draftFollowUps(params.task ?? "", { attendees, meet: Boolean(f.meet), location: f.location, description: params.body?.trim() }, meta.calendars.filter((c) => c.writable).length)),
+    ]);
     const allDay = typeof f.allDay === "boolean" ? f.allDay : picks.allDay;
     const now = new Date();
     const nextHalf = new Date(Math.ceil((now.getTime() + 5 * 60e3) / (30 * 60e3)) * 30 * 60e3);
     const start = wallFromInput(f.start, tz) ?? wall(nextHalf.toISOString(), tz);
     const endWall = wallFromInput(f.end, tz) ?? addMinutesWall(start, picks.durationMin);
     const calendar = calendarFor(meta.calendars, f.calendar ?? picks.calendar);
-    const draft = { title, description: params.body?.trim() ?? "", start, end: endWall, allDay, attendees, location: f.location ?? "", meet: typeof f.meet === "boolean" ? f.meet : picks.meet, calendar: calendar?.id, calendarName: calendar?.name, timeZone: tz };
+    const draft = { title, description: params.body?.trim() ?? "", start, end: endWall, allDay, attendees, location: f.location ?? "", meet: typeof f.meet === "boolean" ? f.meet : picks.meet, calendar: calendar?.id, calendarName: calendar?.name, timeZone: tz , followUps: fu.actions };
     return {
       summary: `Create dialog shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Create event:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft, calendars: meta.calendars.filter((c) => c.writable).map((c) => ({ id: c.id, name: c.name, color: c.color, primary: c.primary })), picks: { by: picks.by, confidence: picks.confidence }, timing: { google: tGoogle, jev: tJev } },
-      picked: `${allDay ? "all day" : `${picks.durationMin} min`}${draft.meet ? ", Meet" : ""}, calendar ${calendar?.name ?? "primary"}`,
+      picked: `${allDay ? "all day" : `${picks.durationMin} min`}${draft.meet ? ", Meet" : ""}, calendar ${calendar?.name ?? "primary"}`, offered: fu.actions,
     };
   },
 
@@ -279,11 +289,12 @@ export const gcal = defineConnector({
     if (del) { const { cal, id } = await locate(del); const ev = await getEvent(token, cal, id, signal).catch(() => undefined); await deleteEvent(token, cal, id, signal); applied.push(`${ev?.title ?? del}: deleted`); }
     await rememberKeys(cache, fresh);
     const tWrite = ms(startedAt);
-    const comp: Composition = { view: fresh.length === 1 ? "event" : "agenda", range: "next_14_days", fields: { attendees: true, location: true, description: fresh.length === 1, past: true, invitesOnly: false }, by: "fallback" };
+    const used = [...new Set([...changes.flatMap((c) => [c.start !== undefined || c.end !== undefined ? "reschedule" : "", c.guests !== undefined ? "guests" : "", c.title !== undefined || c.location !== undefined ? "details" : "", c.meet !== undefined ? "meet" : ""].filter(Boolean)), ...(rsvpReq ? ["rsvp"] : []), ...(create ? ["create"] : []), ...(del ? ["delete"] : [])])];
+    const comp: Composition = { view: fresh.length === 1 ? "event" : "agenda", range: "next_14_days", fields: { attendees: true, location: true, description: fresh.length === 1, past: true, invitesOnly: false }, by: "fallback" , followUps: used.filter((u) => u === "rsvp" || u === "reschedule" || u === "guests" || u === "details") };
     return {
       summary: `Saved to Google Calendar: ${applied.join("; ")}. The card shows the result; reply with nothing.`,
-      payload: fresh.length === 1 ? { kind: "event", timeZone: tz, event: fresh[0], calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), applied, timing: { google: tWrite } } : { kind: "view", task: "Saved", timeZone: tz, now: wall(new Date().toISOString(), tz), calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), events: fresh, composition: comp, applied, timing: { google: tWrite } },
-      ...(typeof correction === "string" ? { correction } : {}),
+      payload: fresh.length === 1 ? { kind: "event", followUps: comp.followUps, timeZone: tz, event: fresh[0], calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), applied, timing: { google: tWrite } } : { kind: "view", task: "Saved", timeZone: tz, now: wall(new Date().toISOString(), tz), calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), events: fresh, composition: comp, applied, timing: { google: tWrite } },
+      ...(typeof correction === "string" ? { correction } : {}), used,
     };
   },
 });

@@ -5,7 +5,7 @@
  * hosted route answers at most JEV_MAX_QUESTIONS and the runtime drops the tail. Every answer has a
  * heuristic twin, so a dropped question degrades to the heuristic, never to a hole.
  */
-import { JEV_MAX_QUESTIONS, choiceOf, yesOf, type JevAnswers, type JevQuestion } from "../../runtime.ts";
+import { JEV_MAX_QUESTIONS, choiceOf, yesOf, type FollowUp, type JevAnswers, type JevQuestion } from "../../runtime.ts";
 import type { Issue, Scope, TeamMeta } from "./read.ts";
 import { inScope } from "./read.ts";
 
@@ -13,7 +13,47 @@ export type Composition = {
   view: "issue" | "list" | "board" | "project"; groupBy: "status" | "project" | "assignee" | "priority"; sort: "priority" | "newest" | "none";
   scope: Scope; fields: { description: boolean; labels: boolean; dates: boolean; assignee: boolean; project: boolean };
   by: "jev" | "fallback"; confidence?: number; variant?: string;
+  /** The follow-ups the card offers beside its primary surface (ids from issueFollowUps / listFollowUps / draftFollowUps). */
+  followUps?: string[];
 };
+
+/* ---------- follow-ups: what the person is likely to do right after seeing the card ---------- */
+const t = (task: string) => task.toLowerCase();
+/** One issue: the properties are shown; the picked ones become pickers, the comment box appears when likely. */
+export function issueFollowUps(task: string, issue?: { assignee?: string; labels?: string[]; project?: string; commentDraft?: string }): FollowUp[] {
+  const w = t(task);
+  return [
+    { id: "status", label: "change the issue's status (start it, mark it done, move it back)", when: "The ask or the context is about progress: starting, finishing, closing, shipping, moving it along, a standup.", guess: /\b(done|start|progress|close|ship|finish|status|move)\b/.test(w) },
+    { id: "priority", label: "change its priority", when: "Urgency or importance is in play: triage, planning, 'is this urgent', a review of what to do next.", guess: /\b(priorit|urgent|triage|important)\w*/.test(w) },
+    { id: "comment", label: "leave a comment on it", when: "The person wants to respond, give feedback, leave an update for others, answer a question on it, or said they want to comment.", guess: Boolean(issue?.commentDraft) || /\b(comment|reply|respond|feedback|tell|note|update)\b/.test(w), always: Boolean(issue?.commentDraft) },
+    { id: "assignee", label: "reassign it", when: "Ownership or hand-off is the topic: who owns it, assign, delegate, take it, workload.", guess: /\b(assign|owner|owns|who|delegate|take)\b/.test(w) },
+    { id: "labels", label: "edit its labels", when: "Categorising is the point: bug vs feature, triage, a label named in the ask.", guess: /\b(label|bug|feature|tag|categor)\w*/.test(w) },
+    { id: "project", label: "move it to another project", when: "Planning across projects, or the ask names a project the issue is not in.", guess: /\bproject\b/.test(w) },
+  ];
+}
+/** A list or board: rows are the surface; the switches and inline edits are follow-ups. */
+export function listFollowUps(task: string, comp: Composition, n: number): FollowUp[] {
+  const w = t(task);
+  const triage = /\b(triage|plan|priorit|what should|next|groom|backlog|review)\w*/.test(w);
+  return [
+    { id: "edit", label: "change priority or status directly on the rows", when: "The person is triaging, planning, reviewing what to do next, or will act on several issues: inline pickers save a message per change.", unless: "They only want to look (a status check, an overview, a standup read-out).", guess: triage },
+    { id: "scopes", label: "switch between open, in progress, done and all", when: "The ask mixes states or is about catching up, progress, or what shipped; or the person often flips scope after asks like this.", guess: /\b(progress|done|shipped|stand|overview|catch)\w*/.test(w) || comp.scope === "all" },
+    { id: "views", label: "switch between list, board and project views", when: "The ask is about an overview or a project and the other shape would also answer it; or they switched views after similar asks.", guess: comp.view !== "list" },
+    { id: "group", label: "regroup the board by status, project, assignee or priority", when: "The board is about ownership, workload, urgency or cross-project progress, where another grouping is a natural next look.", unless: "The view is a plain list, or one grouping plainly answers the ask.", guess: comp.view === "board" && comp.groupBy !== "status" },
+    { id: "create", label: "add a new issue from here", when: "Planning, grooming or triage where new work usually comes up; the person said they want to add something; the list is short and the topic invites it.", guess: /\b(add|new|create|plan|groom)\w*/.test(w) && n < 30 },
+  ];
+}
+/** The create dialog: title and description are always editable; the pickers for the picked properties show, the rest are chips. */
+export function draftFollowUps(task: string, picks: { project?: string; labels: string[]; assignee?: string }, meta: { projects: unknown[]; labels: unknown[]; members: string[] }): FollowUp[] {
+  const w = t(task);
+  return [
+    { id: "priority", label: "adjust the priority before creating", when: "The ask gave no priority, or priority words are vague; the person tends to set it.", guess: !/\b(urgent|high|medium|low|p[0-3])\b/.test(w) },
+    { id: "project", label: "pick or change the project", when: "Projects exist and the ask did not name one, or the picked project is a guess.", unless: "No projects, or the ask named the project.", guess: meta.projects.length > 0 && !picks.project },
+    { id: "labels", label: "add or change labels", when: "Labels exist and categorising matters here (bugs, features, triage).", unless: "No labels in the team, or the ask is plain.", guess: meta.labels.length > 0 && !picks.labels.length && /\b(bug|feature|design|decision)\b/.test(w) },
+    { id: "assignee", label: "choose the assignee", when: "Several people are on the team and the ask did not say who.", unless: "A one-person team, or the ask said who.", guess: meta.members.length > 1 && !picks.assignee },
+    { id: "state", label: "change the starting status", when: "The ask hints the work is already underway or parked, or the person tends to change it.", guess: /\b(progress|started|backlog|later|someday)\b/.test(w) },
+  ];
+}
 
 /* ---------- heuristics ---------- */
 export function guessScope(task: string): Scope {
