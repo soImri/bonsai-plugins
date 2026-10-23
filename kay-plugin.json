@@ -2,8 +2,8 @@
   "protocol": "kay.plugin.v1",
   "id": "com.imrisofer.connector-cards",
   "displayName": "Connector cards",
-  "description": "Connector-owned UI in the chat. Linear first: an issue card and a create-issue card in Linear's own shape, filled by the agent, edited by the person, created through Bonsai's Linear connector.",
-  "version": "0.1.0",
+  "description": "Connector-owned UI in the chat. Linear first: issue, list, board, project and create cards in Linear's own shape. One tool call per ask; the plugin reads Linear itself and Jev picks the view and fields at runtime.",
+  "version": "0.2.0",
   "namespace": "linearcards",
   "compatibility": {
     "sdk": "^0.13.0"
@@ -14,12 +14,13 @@
         "entrypoint": {
           "module": "./kay-agent.ts"
         },
+        "primer": "linear-cards",
         "contributes": {
           "skills": [
             {
               "localId": "linear-cards",
               "displayName": "Linear cards",
-              "description": "Show a Linear issue, or draft and create one, through Linear-shaped cards in the chat instead of prose. Use for 'show NEAT-9', 'what's the status of', 'create an issue for', 'file this in Linear'. Reads go through linear://, the create goes through the Linear MCP after the person presses Create issue on the card.",
+              "description": "Show, triage, or create Linear issues through Linear-shaped cards in the chat. One tool call with the person's words; the plugin reads Linear and Jev picks the view. Use for 'show NEAT-9', 'what's open', 'where do we stand', 'create an issue for', 'file this in Linear'.",
               "path": "./skills/linear-cards/SKILL.md"
             }
           ],
@@ -28,19 +29,19 @@
               "localId": "issue",
               "toolName": "linearcards_issue",
               "displayName": "Linear issue card",
-              "description": "Show one Linear issue in the chat as a card in Linear's own issue layout. Read the issue from linear:// first, then pass its fields."
+              "description": "Show one Linear issue as Linear's own issue view. Pass only the identifier; the plugin reads the issue and the team's pick lists itself."
             },
             {
               "localId": "newissue",
               "toolName": "linearcards_newissue",
               "displayName": "Linear new issue",
-              "description": "Draft a new Linear issue in the chat as Linear's create dialog, prefilled. The person edits and presses Create issue; the card sends the final values back as a message."
+              "description": "Draft a new Linear issue as Linear's create dialog. Pass the person's words and a short title; the plugin reads the pick lists and Jev picks status, priority, project, labels and assignee. The person edits and presses Create issue."
             },
             {
               "localId": "view",
               "toolName": "linearcards_view",
               "displayName": "Linear view",
-              "description": "Show one or more Linear issues in the chat. Bonsai's Jev picks the view (one issue, a list, or a board by status) and the fields from the task."
+              "description": "Show Linear issues as Linear's own UI. Pass the person's words; the plugin reads Linear and Jev picks the view (issue, list, board, project), scope and fields."
             }
           ]
         }
@@ -49,6 +50,26 @@
         "entrypoint": {
           "module": "./kay-ui.tsx"
         }
+      }
+    }
+  },
+  "permissions": {
+    "byTarget": {
+      "kay.agent": {
+        "auth": [
+          {
+            "service": "linear.account",
+            "schemes": [
+              "linear.mcp-oauth"
+            ],
+            "operations": [
+              "resolve"
+            ],
+            "purposes": [
+              "Read issues, states, labels, projects and members from the connected Linear workspace to draw the cards. Never writes."
+            ]
+          }
+        ]
       }
     }
   }

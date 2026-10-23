@@ -45,6 +45,10 @@ const row: CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "cen
 const mono: CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
 const footer: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${v("border")}`, padding: "10px 16px" };
 function parse<T>(raw: string | undefined): T | null { if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } }
+/** v2: the tool fetches from Linear and returns the render payload in its result's details; v1 passed it in the arguments. */
+function detailsOf(rawResult: string | undefined): any { const r = parse<any>(rawResult); return r?.details ?? null; }
+function ErrorCard({ message }: { message: string }) { return <div style={{ ...card, ...pad, ...muted }}>{message}</div>; }
+function Timing({ t }: { t?: { linear?: string; jev?: string } }) { if (!t) return null; return <span>{[t.linear ? `Linear ${t.linear}` : null, t.jev ? `Jev ${t.jev}` : null].filter(Boolean).join(" · ")}</span>; }
 const day = (s?: string) => (s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
 const propsOf = (i: Issue, states: State[]): Props => ({ state: states.find(s => s.name === i.state?.name) ?? i.state, priority: i.priority ?? 0, assignee: i.assignee, project: i.project, labels: i.labels ?? [] });
 function diff(a: Props, b: Props): string[] {
@@ -198,8 +202,9 @@ function Description({ md }: { md: string }) {
 }
 
 /* ---------- IssueCard: the core view ---------- */
-function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
-  const issue = useMemo(() => parse<Issue>(rawArgs), [rawArgs]);
+function IssueCard({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
+  const details = useMemo(() => detailsOf(rawResult), [rawResult]);
+  const issue = useMemo<Issue | null>(() => details?.issue ?? parse<Issue>(rawArgs), [details, rawArgs]);
   const actions = useKayActions(sessionId);
   const states = issue?.options?.states?.length ? issue.options.states : DEFAULT_STATES;
   const initial = useMemo<Props>(() => (issue ? propsOf(issue, states) : { priority: 0, labels: [] }), [issue]);
@@ -208,7 +213,8 @@ function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const [saving, setSaving] = useState(false);
   const dirty = useRef(false);
   useEffect(() => { if (!dirty.current) { setSaved(initial); setCur(initial); } }, [initial]);
-  if (!issue || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Loading issue…" : "No issue data."}</div>;
+  if (details?.error) return <ErrorCard message={details.error} />;
+  if (!issue?.title || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Reading Linear…" : "No issue data."}</div>;
   const changes = diff(saved, cur); dirty.current = changes.length > 0;
   async function save() { setSaving(true); const next = cur; await actions.sendMessage(`Update ${issue!.identifier}: ${changes.join("; ")}`); setSaved(next); setSaving(false); }
   return (
@@ -226,14 +232,15 @@ function IssueCard({ phase, rawArgs, sessionId }: RendererProps) {
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {day(issue.createdAt)}{issue.completedAt ? ` · Done ${day(issue.completedAt)}` : ""}</div> : null}
         <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} sessionId={sessionId} />
       </div>
-      <SaveBar count={changes.length} saving={saving} onDiscard={() => setCur(saved)} onSave={save} />
+      <SaveBar count={changes.length} saving={saving} onDiscard={() => setCur(saved)} onSave={save} note={details?.timing?.linear ? `Linear ${details.timing.linear}` : undefined} />
     </section>
   );
 }
 
 /* ---------- NewIssueCard: Linear's create dialog ---------- */
-function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
-  const draft = useMemo(() => parse<Draft>(rawArgs), [rawArgs]);
+function NewIssueCard({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
+  const details = useMemo(() => detailsOf(rawResult), [rawResult]);
+  const draft = useMemo<Draft | null>(() => details?.draft ?? parse<Draft>(rawArgs), [details, rawArgs]);
   const actions = useKayActions(sessionId);
   const states = draft?.options?.states?.length ? draft.options.states : DEFAULT_STATES;
   const seed = useMemo<Props & { title: string; desc: string }>(() => ({
@@ -246,7 +253,8 @@ function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
   const [sent, setSent] = useState(false);
   const touched = useRef(false);
   useEffect(() => { if (!touched.current) { setTitle(seed.title); setDesc(seed.desc); setProps(seed); } }, [seed]);
-  if (!draft || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Preparing draft…" : "No draft data."}</div>;
+  if (details?.error) return <ErrorCard message={details.error} />;
+  if (!draft?.team || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Reading Linear…" : "No draft data."}</div>;
   async function create() {
     const final = { team: draft!.team, title: title.trim(), description: desc.trim(), state: props.state?.name, priority: props.priority, assignee: props.assignee, project: props.project, labels: props.labels };
     const summary = [props.state?.name, PRIORITIES[props.priority], props.assignee, props.project, props.labels.length ? props.labels.join(", ") : null].filter(Boolean).join(" · ");
@@ -264,7 +272,7 @@ function NewIssueCard({ phase, rawArgs, sessionId }: RendererProps) {
         </div>
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear…" : ""}</span>
+        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear…" : details?.picks ? <>{details.picks.by === "jev" ? "Fields picked by Jev" : "Default fields"}{details.timing ? <> · <Timing t={details.timing} /></> : null}</> : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !title.trim()} onClick={create}>{sent ? "Creating…" : "Create issue"}</Button>
       </div>
     </section>
@@ -312,7 +320,8 @@ function readComposition(rawResult: string | undefined, n: number): Composition 
 }
 
 function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
-  const args = useMemo(() => parse<ViewArgs>(rawArgs), [rawArgs]);
+  const details = useMemo(() => detailsOf(rawResult), [rawResult]);
+  const args = useMemo<ViewArgs | null>(() => (Array.isArray(details?.issues) ? (details as ViewArgs) : parse<ViewArgs>(rawArgs)), [details, rawArgs]);
   const actions = useKayActions(sessionId);
   const issues = args?.issues ?? [];
   const comp = useMemo(() => readComposition(rawResult, issues.length), [rawResult, issues.length]);
@@ -323,7 +332,9 @@ function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
   const [saving, setSaving] = useState(false);
   const dirty = useRef(false);
   useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); } }, [seed]);
-  if (!args || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Composing view…" : "No issues."}</div>;
+  if (details?.error) return <ErrorCard message={details.error} />;
+  if (!args || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Reading Linear…" : "No issues."}</div>;
+  if (!issues.length) return <ErrorCard message={`No ${(comp as any).scope && (comp as any).scope !== "all" ? `${(comp as any).scope} ` : ""}issues match.`} />;
 
   if (comp.view === "issue" && issues.length >= 1) {
     const one = { ...issues[0], options: issues[0].options ?? args.options };
@@ -347,7 +358,8 @@ function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
   const done = issues.filter(i => stateOf(i).type === "completed").length;
   const inProgress = issues.filter(i => stateOf(i).type === "started").length;
   const viewName = comp.view === "list" ? "List" : comp.view === "board" ? `Board by ${gb}` : "Project";
-  const caption = `${viewName} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}`;
+  const t = details?.timing as { linear?: string; jev?: string } | undefined;
+  const caption = `${viewName} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.linear ? ` · Linear ${t.linear}` : ""}${t?.jev ? ` · Jev ${t.jev}` : ""}`;
 
   return (
     <section style={card}>

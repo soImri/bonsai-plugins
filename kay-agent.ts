@@ -1,184 +1,378 @@
 /**
- * Connector cards — agent side.
+ * Connector cards — agent side (v2: the plugin does the work).
  *
- * Two tools whose only job is to carry structured fields into the chat, where
- * this plugin's UI (kay-ui.tsx) draws them as Linear's own issue view and
- * create dialog. The agent reads from linear:// and creates through the Linear
- * MCP; these tools never touch Linear.
+ * One small tool call per ask. The agent passes words; the tool reads Linear through Bonsai's own
+ * Linear connection (a consented shared-identity grant on linear.account), asks Jev once which
+ * composition, scope and fields fit the task, and hands the UI (kay-ui.tsx) a render-ready
+ * payload in the result's `details`. Writes still go through the Linear MCP behind Bonsai's
+ * normal approvals; these tools never write.
+ *
+ * Why: measured on 2026-10-20, a create-card ask took 2m27s, of which the tool itself took ~0ms.
+ * The time was nine agent round trips reading primers, schemas and pick lists. Moving the reads
+ * here makes the agent's part one call with ~100 bytes of arguments.
  */
-const stateSchema = {
-  type: "object",
-  properties: {
-    name: { type: "string", description: "Workflow state name as Linear shows it, e.g. Todo, In Progress, Done." },
-    type: { type: "string", enum: ["backlog", "unstarted", "started", "completed", "canceled"], description: "Linear state type." },
-  },
-  required: ["name"],
+import { withResolvedAuth } from "@bonsai/plugin-sdk/kay-agent";
+
+const LINEAR_AUTH = { serviceId: "linear.account", schemeId: "linear.mcp-oauth" } as const;
+const GRAPHQL = "https://api.linear.app/graphql";
+const META_TTL_MS = 10 * 60 * 1000;
+const ISSUE_LIMIT = 50;
+const DESCRIPTION_CAP = 700;
+
+/* ---------- shapes the UI reads ---------- */
+type State = { name: string; type: string; position?: number };
+type Project = { name: string; summary?: string; lead?: string; targetDate?: string; status?: string };
+type Label = { name: string; description?: string };
+type Options = { states: State[]; projects: string[]; labels: string[]; members: string[] };
+type TeamMeta = { id: string; key: string; name: string; viewer: string; states: State[]; projects: Project[]; labels: Label[]; members: string[]; at: number };
+type Issue = {
+  identifier: string; title: string; description?: string; url?: string;
+  state: { name: string; type: string }; priority: number; assignee?: string; project?: string; labels: string[];
+  createdAt?: string; completedAt?: string; updatedAt?: string;
+};
+type Scope = "open" | "active" | "done" | "all";
+type Composition = {
+  view: "issue" | "list" | "board" | "project"; groupBy: "status" | "project" | "assignee" | "priority"; sort: "priority" | "newest" | "none";
+  scope: Scope; fields: { description: boolean; labels: boolean; dates: boolean; assignee: boolean; project: boolean };
+  by: "jev" | "fallback"; confidence?: number;
 };
 
-const issueFields = {
-  identifier: { type: "string", description: "Issue identifier, e.g. NEAT-9." },
-  title: { type: "string" },
-  description: { type: "string", description: "Markdown body. Optional." },
-  url: { type: "string", description: "Linear web URL. Optional." },
-  state: stateSchema,
-  priority: { type: "integer", minimum: 0, maximum: 4, description: "0 none, 1 urgent, 2 high, 3 medium, 4 low." },
-  assignee: { type: "string", description: "Display name. Optional." },
-  project: { type: "string", description: "Project name. Optional." },
-  labels: { type: "array", items: { type: "string" } },
-  createdAt: { type: "string", description: "ISO date. Optional." },
-  completedAt: { type: "string", description: "ISO date. Optional." },
-  commentDraft: { type: "string", description: "Prefill the card's comment box with this text (the person presses Comment to post). Optional." },
-  options: {
-    type: "object",
-    description: "The team's pick lists so the card's pills can change values. Optional but recommended.",
-    properties: {
-      states: { type: "array", items: stateSchema },
-      projects: { type: "array", items: { type: "string" } },
-      labels: { type: "array", items: { type: "string" } },
-      members: { type: "array", items: { type: "string" } },
-    },
-  },
-};
+/* ---------- Linear GraphQL ---------- */
+class LinearHttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 
-const text = (t: string) => ({ content: [{ type: "text", text: t }], details: undefined });
+async function gql<T>(token: string, query: string, variables: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(GRAPHQL, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ query, variables }),
+    ...(signal ? { signal } : {}),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new LinearHttpError(res.status, `Linear GraphQL answered ${res.status}: ${text.slice(0, 160)}`);
+  const json = JSON.parse(text) as { data?: T; errors?: { message: string }[] };
+  if (json.errors?.length) throw new Error(`Linear GraphQL: ${json.errors.map((e) => e.message).join("; ")}`);
+  return json.data as T;
+}
 
-const issueItem = { type: "object", properties: issueFields, required: ["identifier", "title", "state", "priority"] };
-const optionsSchema = issueFields.options;
+const TEAMS_Q = `query { viewer { displayName } teams(first: 50) { nodes { id key name } } }`;
+const STATES_Q = `query($id: String!) { team(id: $id) { states(first: 50) { nodes { name type position } } members(first: 50) { nodes { displayName } } } }`;
+const LABELS_Q = `query($id: String!) { team(id: $id) { labels(first: 100) { nodes { name description isGroup retiredAt } } } issueLabels(first: 100, filter: { team: { null: true } }) { nodes { name description isGroup retiredAt } } }`;
+const LABELS_Q_BARE = `query($id: String!) { team(id: $id) { labels(first: 100) { nodes { name description } } } issueLabels(first: 100, filter: { team: { null: true } }) { nodes { name description } } }`;
+const PROJECTS_Q = `query($id: String!) { team(id: $id) { projects(first: 50) { nodes { name description status { name } lead { displayName } targetDate } } } }`;
+const ISSUE_FIELDS = `identifier title description priority url createdAt completedAt updatedAt state { name type } assignee { displayName } project { name } labels(first: 20) { nodes { name } }`;
+const ISSUES_Q = `query($filter: IssueFilter, $first: Int!) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { ${ISSUE_FIELDS} } } }`;
 
-export const activate = (api) => {
-  // Bonsai's Jev lane, when the host binds one. Without it the fallback decides.
-  const withJev = typeof api.withJev === "function" ? api.withJev : (_use, fallback) => Promise.resolve(fallback());
+type TeamRef = { id: string; key: string; name: string };
+let teamsCache: { at: number; viewer: string; teams: TeamRef[] } | undefined;
+const metaCache = new Map<string, TeamMeta>();
 
-  api.registerTool({
-    name: "linearcards_view",
-    label: "Linear view",
-    description:
-      "Show one or more Linear issues in the chat. Pass the person's request as task and the issues you read from linear:// (compact fields). Bonsai's Jev picks the view (one issue in full, a list of rows, or a board grouped by status) and which fields to show; the card draws it. Use for 'what's open', 'my issues', 'what's in progress', 'triage', or any ask about several issues.",
-    parameters: {
-      type: "object",
-      properties: {
-        task: { type: "string", description: "The person's request, in their words." },
-        issues: { type: "array", items: issueItem },
-        options: optionsSchema,
-        project: { type: "object", description: "When the task is about one project, its header facts. Optional.", properties: { name: { type: "string" }, lead: { type: "string" }, targetDate: { type: "string" }, description: { type: "string" } }, required: ["name"] },
-      },
-      required: ["task", "issues"],
-    },
-    async execute(_id, params, signal) {
-      const issues = params.issues ?? [];
-      const n = issues.length;
-      const byCount = () => ({ view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" });
-      const composition = await withJev(
-        async (jev) => {
-          const sample = issues.slice(0, 8).map((i) => ({ identifier: i.identifier, title: i.title, state: i.state?.name, stateType: i.state?.type, priority: i.priority, project: i.project, assignee: i.assignee, labels: i.labels, hasDescription: Boolean(i.description) }));
-          const projects = [...new Set(issues.map((i) => i.project).filter(Boolean))];
-          const { answers } = await jev.classify({
-            state: { task: params.task, count: n, distinctProjects: projects.length, projectNamed: params.project?.name ?? null, sample },
-            questions: {
-              view: {
-                type: "choice",
-                instructions: "Pick the Linear composition that answers the task. Judge the wording of the task first, then the count and shape of the issues. Examples: 'show NEAT-9' -> issue; 'what's open', 'my issues', 'triage', 'list the bugs' -> list; 'where do we stand', 'how is the team doing', 'standup', 'what's blocked', 'overview' -> board; 'how is <project> going', 'what's left in <project>', 'project status' -> project.",
-                criteria: {
-                  issue: "One issue in full: title, description, properties, comment box. The task names or is about a single issue, or there is exactly one issue.",
-                  list: "Several issues as compact editable rows. The task is to see, scan, pick from, or triage issues; grouping would not help.",
-                  board: "Several issues grouped under headers. The task is about where things stand, progress, what is blocked, an overview, a standup.",
-                  project: "A project header with a progress bar and its issues grouped. The task is about one project as a whole: how it is going, what is left, its status.",
-                },
-              },
-              groupBy: {
-                type: "choice",
-                instructions: "If the view groups issues, by which property? Examples: 'where do we stand', 'what's done', 'blocked' -> status; 'across projects', 'per project', 'what's left in each project' -> project; 'who owns what', 'per person', 'workload' -> assignee; 'what's urgent', 'by importance', 'triage' -> priority.",
-                criteria: {
-                  status: "The task is about progress, completion, or blockage.",
-                  project: "The task compares or splits work across projects.",
-                  assignee: "The task is about who owns what, workload, or hand-offs.",
-                  priority: "The task is about urgency or importance.",
-                },
-              },
-              sort: {
-                type: "choice",
-                instructions: "Order of the rows within the view or within each group.",
-                criteria: {
-                  priority: "Urgent first. The default for triage, open work, what to do next.",
-                  newest: "Most recently created first. The task is about what came in, what is new, recent activity.",
-                  none: "Keep Linear's order. The task does not care about order.",
-                },
-              },
-              description: { type: "bool", instructions: "Show each issue's description text?", criteria: { true: "The task needs the body to judge or act (review, decide, understand one issue).", false: "Titles and properties are enough (scan, status, overview, triage)." } },
-              labels: { type: "bool", instructions: "Show labels?", criteria: { true: "The task mentions a label or category (bug, decision, design), or triage.", false: "Labels do not help the task." } },
-              dates: { type: "bool", instructions: "Show created and done dates?", criteria: { true: "Timing matters: recent, new, stale, how long, this week, deadlines.", false: "Timing does not matter." } },
-              assignee: { type: "bool", instructions: "Show the assignee?", criteria: { true: "Ownership matters, more than one person is involved, or the task asks who.", false: "One person does everything here, or ownership is beside the point." } },
-              project: { type: "bool", instructions: "Show the project of each issue?", criteria: { true: "Issues span more than one project, or the task mentions projects.", false: "All issues share one project, or the view already groups by project." } },
-            },
-          });
-          const v = answers.view;
-          if (v?.type !== "choice") return undefined;
-          const pick = (k) => (answers[k]?.type === "choice" ? answers[k].choice : undefined);
-          const yes = (k) => answers[k]?.type === "bool" && answers[k].probability >= 0.5;
-          const view = n === 1 && v.choice !== "project" ? "issue" : v.choice;
-          const groupBy = view === "project" ? (pick("groupBy") === "project" ? "status" : pick("groupBy") ?? "status") : pick("groupBy") ?? "status";
-          return {
-            view, groupBy, sort: pick("sort") ?? "priority",
-            fields: { description: yes("description"), labels: yes("labels"), dates: yes("dates"), assignee: yes("assignee"), project: yes("project") && groupBy !== "project" },
-            by: "jev", confidence: v.confidence,
-          };
+async function readTeams(token: string, signal?: AbortSignal) {
+  if (teamsCache && Date.now() - teamsCache.at < META_TTL_MS) return teamsCache;
+  const d = await gql<{ viewer: { displayName: string }; teams: { nodes: TeamRef[] } }>(token, TEAMS_Q, {}, signal);
+  teamsCache = { at: Date.now(), viewer: d.viewer.displayName, teams: d.teams.nodes };
+  return teamsCache;
+}
+
+function pickTeam(teams: TeamRef[], hint: string | undefined, text: string): TeamRef {
+  const h = hint?.trim().toLowerCase();
+  if (h) { const t = teams.find((t) => t.key.toLowerCase() === h || t.name.toLowerCase() === h); if (t) return t; }
+  const id = text.match(/\b([A-Z][A-Z0-9]{1,9})-\d+\b/);
+  if (id) { const t = teams.find((t) => t.key === id[1]); if (t) return t; }
+  const lower = text.toLowerCase();
+  const named = teams.find((t) => lower.includes(t.key.toLowerCase()) || lower.includes(t.name.toLowerCase()));
+  return named ?? teams[0];
+}
+
+async function readMeta(token: string, team: TeamRef, viewer: string, dataDir: string | undefined, signal?: AbortSignal): Promise<TeamMeta> {
+  const hit = metaCache.get(team.key);
+  if (hit && Date.now() - hit.at < META_TTL_MS) return hit;
+  const disk = hit ?? (await readDisk(dataDir, team.key));
+  if (disk) { metaCache.set(team.key, disk); if (Date.now() - disk.at < META_TTL_MS) return disk; }
+  const vars = { id: team.id };
+  const labelsQ = gql<any>(token, LABELS_Q, vars, signal).catch(() => gql<any>(token, LABELS_Q_BARE, vars, signal));
+  const [s, l, p] = await Promise.all([gql<any>(token, STATES_Q, vars, signal), labelsQ, gql<any>(token, PROJECTS_Q, vars, signal)]);
+  const labelNodes = [...(l.team?.labels?.nodes ?? []), ...(l.issueLabels?.nodes ?? [])].filter((x: any) => !x.isGroup && !x.retiredAt);
+  const seen = new Set<string>();
+  const labels: Label[] = labelNodes.filter((x: any) => (seen.has(x.name) ? false : (seen.add(x.name), true))).map((x: any) => ({ name: x.name, ...(x.description ? { description: x.description } : {}) }));
+  const meta: TeamMeta = {
+    id: team.id, key: team.key, name: team.name, viewer, at: Date.now(),
+    states: (s.team?.states?.nodes ?? []).sort((a: State, b: State) => (a.position ?? 0) - (b.position ?? 0)).map((x: any) => ({ name: x.name, type: x.type, position: x.position })),
+    members: (s.team?.members?.nodes ?? []).map((m: any) => m.displayName).filter(Boolean),
+    labels,
+    projects: (p.team?.projects?.nodes ?? []).map((x: any) => ({ name: x.name, ...(x.description ? { summary: String(x.description).slice(0, 240) } : {}), ...(x.lead?.displayName ? { lead: x.lead.displayName } : {}), ...(x.targetDate ? { targetDate: x.targetDate } : {}), ...(x.status?.name ? { status: x.status.name } : {}) })),
+  };
+  metaCache.set(team.key, meta);
+  void writeDisk(dataDir, team.key, meta);
+  return meta;
+}
+
+async function readDisk(dataDir: string | undefined, key: string): Promise<TeamMeta | undefined> {
+  if (!dataDir) return undefined;
+  try { const { readFile } = await import("node:fs/promises"); return JSON.parse(await readFile(`${dataDir}/team-${key}.json`, "utf8")) as TeamMeta; } catch { return undefined; }
+}
+async function writeDisk(dataDir: string | undefined, key: string, meta: TeamMeta) {
+  if (!dataDir) return;
+  try { const { writeFile } = await import("node:fs/promises"); await writeFile(`${dataDir}/team-${key}.json`, JSON.stringify(meta), "utf8"); } catch { /* cache only */ }
+}
+
+const optionsOf = (m: TeamMeta): Options => ({ states: m.states.map(({ name, type }) => ({ name, type })), projects: m.projects.map((p) => p.name), labels: m.labels.map((l) => l.name), members: m.members });
+
+function normalizeIssue(n: any): Issue {
+  const desc = typeof n.description === "string" ? n.description : "";
+  return {
+    identifier: n.identifier, title: n.title, url: n.url,
+    ...(desc ? { description: desc.length > DESCRIPTION_CAP ? `${desc.slice(0, DESCRIPTION_CAP)}…` : desc } : {}),
+    state: { name: n.state?.name ?? "Unknown", type: n.state?.type ?? "unstarted" }, priority: n.priority ?? 0,
+    ...(n.assignee?.displayName ? { assignee: n.assignee.displayName } : {}), ...(n.project?.name ? { project: n.project.name } : {}),
+    labels: (n.labels?.nodes ?? []).map((l: any) => l.name), createdAt: n.createdAt, updatedAt: n.updatedAt, ...(n.completedAt ? { completedAt: n.completedAt } : {}),
+  };
+}
+
+async function readIssues(token: string, team: TeamRef, p: { identifiers?: string[]; query?: string; project?: string; assignee?: string; limit?: number }, signal?: AbortSignal): Promise<Issue[]> {
+  const and: Record<string, unknown>[] = [];
+  const ids = (p.identifiers ?? []).map((s) => s.toUpperCase().match(/^([A-Z][A-Z0-9]{1,9})-(\d+)$/)).filter(Boolean) as RegExpMatchArray[];
+  if (ids.length) and.push({ or: ids.map((m) => ({ team: { key: { eq: m[1] } }, number: { eq: Number(m[2]) } })) });
+  else and.push({ team: { id: { eq: team.id } } });
+  if (p.query) and.push({ or: [{ title: { containsIgnoreCase: p.query } }, { description: { containsIgnoreCase: p.query } }] });
+  if (p.project) and.push({ project: { name: { containsIgnoreCase: p.project } } });
+  if (p.assignee) and.push(p.assignee === "me" ? { assignee: { isMe: { eq: true } } } : { assignee: { displayName: { containsIgnoreCase: p.assignee } } });
+  const d = await gql<{ issues: { nodes: any[] } }>(token, ISSUES_Q, { filter: { and }, first: Math.min(Math.max(p.limit ?? ISSUE_LIMIT, 1), 100) }, signal);
+  return d.issues.nodes.map(normalizeIssue);
+}
+
+const SCOPE_TYPES: Record<Scope, string[] | null> = { open: ["triage", "backlog", "unstarted", "started"], active: ["started"], done: ["completed"], all: null };
+const inScope = (i: Issue, s: Scope) => SCOPE_TYPES[s] === null || SCOPE_TYPES[s]!.includes(i.state.type);
+
+/* ---------- heuristics (the behaviour without Jev) ---------- */
+function guessScope(task: string): Scope {
+  const t = task.toLowerCase();
+  if (/\b(done|shipped|completed|closed|finished)\b/.test(t)) return "done";
+  if (/\b(in progress|working on|wip|being worked)\b/.test(t)) return "active";
+  if (/\b(all|everything|every issue|whole|entire|where do we stand|overview|board)\b/.test(t)) return "all";
+  return "open";
+}
+function guessComposition(task: string, n: number, projectNamed: boolean): Composition {
+  const t = task.toLowerCase();
+  const view = n === 1 ? "issue" : projectNamed || /\bproject\b|how is .+ going|what'?s left in/.test(t) ? "project" : /\b(board|standup|where do we stand|overview|blocked|progress|who owns|per person|workload)\b/.test(t) ? "board" : "list";
+  const groupBy = /\b(who|per person|workload|owns)\b/.test(t) ? "assignee" : /\b(urgent|priority|importance)\b/.test(t) ? "priority" : /\b(across projects|per project|each project)\b/.test(t) ? "project" : "status";
+  return { view, groupBy, sort: /\b(new|recent|latest|came in)\b/.test(t) ? "newest" : "priority", scope: guessScope(task), fields: { description: n === 1, labels: true, dates: /\b(new|recent|stale|week|deadline|when|old)\b/.test(t), assignee: true, project: !projectNamed }, by: "fallback" };
+}
+function guessPriority(text: string): number {
+  const t = text.toLowerCase();
+  if (/\burgent\b|\bp0\b|asap|critical/.test(t)) return 1;
+  if (/\bhigh\b|\bp1\b|important/.test(t)) return 2;
+  if (/\bmedium\b|\bp2\b|normal/.test(t)) return 3;
+  if (/\blow\b|\bp3\b|minor|someday/.test(t)) return 4;
+  return 0;
+}
+function deriveTitle(task: string): string {
+  let t = task.trim().replace(/^(please\s+)?(can you\s+|could you\s+)?(create|open|file|make|add|log|draft)\s+(a\s+|an\s+)?(new\s+)?(linear\s+)?(ticket|issue|task|bug|story)\s*(to|for|about|that|:|-|—)?\s*/i, "");
+  t = t.split(/[.;\n]|,\s*(set|with|priority|assign)/i)[0].trim();
+  if (!t) t = task.trim();
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+  return t.length > 80 ? `${t.slice(0, 77).trimEnd()}…` : t;
+}
+
+/* ---------- results ---------- */
+const text = (t: string, details?: unknown) => ({ content: [{ type: "text" as const, text: t }], details });
+const ms = (from: number) => `${Date.now() - from} ms`;
+function failure(err: unknown, context: string) {
+  const e = err as Error & { status?: number };
+  const why = e instanceof LinearHttpError
+    ? (e.status === 401 || e.status === 403 ? `Linear rejected Bonsai's Linear token on the GraphQL API (HTTP ${e.status}). The token is scoped to Linear's MCP server, so reads must go through linear:// for now.` : e.message)
+    : (e?.name === "AbortError" ? "The call was cancelled." : (e?.message ?? String(err)));
+  return text(`Could not ${context}: ${why}`, { error: why });
+}
+
+type ToolParams = Record<string, any>;
+
+export function activate(api: any) {
+  const withJev = typeof api.withJev === "function" ? api.withJev : (_use: unknown, fallback: () => unknown) => Promise.resolve(fallback());
+
+  // Shared: token → team → meta, one place so every tool sees the same caches.
+  async function context(token: string, hint: string | undefined, textForTeam: string, ctx: any, signal?: AbortSignal) {
+    const { teams, viewer } = await readTeams(token, signal);
+    if (!teams.length) throw new Error("Bonsai's Linear account can see no teams.");
+    const team = pickTeam(teams, hint, textForTeam);
+    const meta = await readMeta(token, team, viewer, ctx?.paths?.dataDir, signal);
+    return { team, meta };
+  }
+
+  /* ---- linearcards_view ---- */
+  api.registerTool(withResolvedAuth(
+    {
+      name: "linearcards_view",
+      label: "Linear view",
+      description:
+        "Show Linear issues in the chat as Linear's own UI. Call this FIRST, with the person's words: it reads Linear itself (no linear:// or mcp reads needed), Jev picks the view (one issue, a list, a board, or a project view) plus scope and fields, and the card draws it. Use for 'what's open', 'my issues', 'what's in progress', 'triage', 'where do we stand', 'how is <project> going', 'show NEAT-9', or any ask about issues. Pass identifiers when the ask names them, query only when it names a topic. After it returns, reply with at most one short line.",
+      parameters: {
+        type: "object",
+        properties: {
+          task: { type: "string", description: "The person's request, in their words." },
+          identifiers: { type: "array", items: { type: "string" }, description: "Issue identifiers the ask names, e.g. [\"NEAT-9\"]. Omit otherwise." },
+          query: { type: "string", description: "A topic keyword to filter titles and descriptions by, only when the ask names a topic (e.g. 'evals'). Omit otherwise." },
+          project: { type: "string", description: "A project name when the ask is about one project. Omit otherwise." },
+          assignee: { type: "string", description: "'me' for the person's own issues, or a display name. Omit otherwise." },
+          team: { type: "string", description: "Team key or name, only when the ask names one. Omit otherwise." },
         },
-        byCount,
-        { timeoutMs: 5000, purpose: "linear-view", ...(signal ? { signal } : {}) },
-      );
-      const who = composition.by === "jev" ? "Jev picked" : "default pick, Jev unavailable";
-      const how = composition.view === "board" || composition.view === "project" ? `, grouped by ${composition.groupBy}` : "";
-      return {
-        content: [{ type: "text", text: `Composed a ${composition.view} view of ${n} issue${n === 1 ? "" : "s"}${how} (${who}). The card is the answer; add at most one short line.` }],
-        details: { composition },
-      };
+        required: ["task"],
+      },
     },
-  });
-
-  api.registerTool({
-    name: "linearcards_issue",
-    label: "Linear issue card",
-    description:
-      "Show one Linear issue in the chat as a card in Linear's own issue layout (identifier, title, description, status, priority, assignee, project, labels). Read the issue from linear:// first, then pass its fields here, plus the team's pick lists in options so the pills are live. Use instead of describing an issue in prose.",
-    parameters: { type: "object", properties: issueFields, required: ["identifier", "title", "state", "priority"] },
-    async execute(_id, params) {
-      return text(`Showing ${params.identifier} as a Linear issue card.`);
-    },
-  });
-
-  api.registerTool({
-    name: "linearcards_newissue",
-    label: "Linear new issue",
-    description:
-      "Draft a new Linear issue in the chat as Linear's create dialog, prefilled with your proposal. The person edits title, description, status, priority, assignee, project and labels on the card and presses Create issue; the card then sends the final values back as a message. Call this instead of creating the issue yourself. Pass the team's real option lists (read from linear://) so the pickers are accurate.",
-    parameters: {
-      type: "object",
-      properties: {
-        team: { type: "string", description: "Team key, e.g. NEAT." },
-        title: { type: "string" },
-        description: { type: "string" },
-        state: { type: "string", description: "Proposed state name, e.g. Todo." },
-        priority: { type: "integer", minimum: 0, maximum: 4 },
-        assignee: { type: "string" },
-        project: { type: "string" },
-        labels: { type: "array", items: { type: "string" } },
-        options: {
-          type: "object",
-          description: "The team's pick lists, from linear://.",
-          properties: {
-            states: { type: "array", items: stateSchema },
-            projects: { type: "array", items: { type: "string" } },
-            labels: { type: "array", items: { type: "string" } },
-            members: { type: "array", items: { type: "string" } },
+    LINEAR_AUTH,
+    async (_id: string, params: ToolParams, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any, auth: { accessToken: string }) => {
+      const t0 = Date.now();
+      try {
+        const { team, meta } = await context(auth.accessToken, params.team, `${params.task} ${(params.identifiers ?? []).join(" ")}`, ctx, signal);
+        const all = await readIssues(auth.accessToken, team, params, signal);
+        const tFetch = ms(t0);
+        const projectNamed = Boolean(params.project);
+        const byType = { open: all.filter((i) => inScope(i, "open")).length, active: all.filter((i) => inScope(i, "active")).length, done: all.filter((i) => inScope(i, "done")).length, total: all.length };
+        const sample = all.slice(0, 8).map((i) => ({ identifier: i.identifier, title: i.title, state: i.state.name, stateType: i.state.type, priority: i.priority, project: i.project, assignee: i.assignee, labels: i.labels }));
+        const tJev0 = Date.now();
+        const comp: Composition = await withJev(
+          async (jev: any) => {
+            const { answers } = await jev.classify({
+              state: { task: params.task, counts: byType, identifiersNamed: params.identifiers ?? [], projectNamed: params.project ?? null, distinctProjects: new Set(all.map((i) => i.project).filter(Boolean)).size, sample },
+              questions: {
+                scope: { type: "choice", instructions: "Which issues does the task want to see? Judge the wording. Examples: 'what's open', 'my issues', 'todo', 'triage', 'what's left', 'backlog' -> open; 'in progress', 'what's being worked on', 'wip' -> active; 'what shipped', 'what's done', 'completed', 'closed' -> done; 'everything', 'all issues', 'where do we stand', 'overview', 'board', or the task names specific identifiers -> all.",
+                  criteria: { open: "Unfinished work: triage, backlog, todo, in progress, in review.", active: "Only work that has started: in progress, in review.", done: "Only completed issues.", all: "Every issue regardless of state." } },
+                view: { type: "choice", instructions: "Pick the Linear composition that answers the task. Judge the wording first, then the counts. Examples: 'show NEAT-9', one identifier -> issue; 'what's open', 'my issues', 'triage', 'list the bugs' -> list; 'where do we stand', 'how is the team doing', 'standup', 'what's blocked', 'overview' -> board; 'how is <project> going', 'what's left in <project>', 'project status' -> project.",
+                  criteria: { issue: "One issue in full: title, description, properties, comment box. The task names or is about a single issue.", list: "Several issues as compact editable rows. The task is to see, scan, pick from, or triage issues; grouping would not help.", board: "Several issues grouped under headers. The task is about where things stand, progress, what is blocked, an overview, a standup.", project: "A project header with a progress bar and its issues grouped. The task is about one project as a whole." } },
+                groupBy: { type: "choice", instructions: "If the view groups issues, by which property? Examples: 'where do we stand', 'what's done', 'blocked' -> status; 'across projects', 'per project' -> project; 'who owns what', 'per person', 'workload' -> assignee; 'what's urgent', 'by importance', 'triage' -> priority.",
+                  criteria: { status: "The task is about progress, completion, or blockage.", project: "The task compares or splits work across projects.", assignee: "The task is about who owns what, workload, or hand-offs.", priority: "The task is about urgency or importance." } },
+                sort: { type: "choice", instructions: "Order of the rows within the view or within each group.",
+                  criteria: { priority: "Urgent first. The default for triage, open work, what to do next.", newest: "Most recently created first. The task is about what came in, what is new, recent activity.", none: "Keep Linear's order. The task does not care about order." } },
+                description: { type: "bool", instructions: "Show each issue's description text?", criteria: { true: "The task needs the body to judge or act (review, decide, understand one issue).", false: "Titles and properties are enough (scan, status, overview, triage)." } },
+                labels: { type: "bool", instructions: "Show labels?", criteria: { true: "The task mentions a label or category (bug, decision, design), or triage.", false: "Labels do not help the task." } },
+                dates: { type: "bool", instructions: "Show created and done dates?", criteria: { true: "Timing matters: recent, new, stale, how long, this week, deadlines.", false: "Timing does not matter." } },
+                assignee: { type: "bool", instructions: "Show the assignee?", criteria: { true: "Ownership matters, more than one person is involved, or the task asks who.", false: "One person does everything here, or ownership is beside the point." } },
+                project: { type: "bool", instructions: "Show the project of each issue?", criteria: { true: "Issues span more than one project, or the task mentions projects.", false: "All issues share one project, or the view already groups by project." } },
+              },
+            });
+            const pick = (k: string) => (answers[k]?.type === "choice" ? answers[k].choice : undefined);
+            const yes = (k: string) => answers[k]?.type === "bool" && answers[k].probability >= 0.5;
+            if (!pick("view")) return undefined;
+            const groupBy = (pick("groupBy") ?? "status") as Composition["groupBy"];
+            return { view: pick("view"), groupBy, sort: pick("sort") ?? "priority", scope: (params.identifiers?.length ? "all" : pick("scope") ?? "open"), fields: { description: yes("description"), labels: yes("labels"), dates: yes("dates"), assignee: yes("assignee"), project: yes("project") && groupBy !== "project" }, by: "jev", confidence: answers.view.confidence } as Composition;
           },
+          () => ({ ...guessComposition(params.task, all.length, projectNamed), scope: params.identifiers?.length ? "all" : guessScope(params.task) } as Composition),
+          { timeoutMs: 6000, purpose: "linear-view", ...(signal ? { signal } : {}) },
+        );
+        const tJev = ms(tJev0);
+        let issues = all.filter((i) => inScope(i, comp.scope));
+        if (!issues.length && all.length) { issues = all; comp.scope = "all"; }
+        if (issues.length === 1 && comp.view !== "project") comp.view = "issue";
+        if (issues.length > 1 && comp.view === "issue") comp.view = "list";
+        if (comp.view === "project" && comp.groupBy === "project") comp.groupBy = "status";
+        if (comp.view === "issue") comp.fields.description = true;
+        const project = comp.view === "project" ? (meta.projects.find((p) => p.name.toLowerCase() === (params.project ?? issues[0]?.project ?? "").toLowerCase()) ?? (params.project ? { name: params.project } : undefined)) : undefined;
+        const who = comp.by === "jev" ? "Jev picked" : "default pick, Jev unavailable";
+        const how = comp.view === "board" || comp.view === "project" ? ` grouped by ${comp.groupBy}` : "";
+        if (!issues.length) return text(`No ${comp.scope === "all" ? "" : `${comp.scope} `}issues in ${team.key} match. Say so in one line.`, { kind: "view", task: params.task, team: team.key, issues: [], options: optionsOf(meta), composition: comp, timing: { linear: tFetch, jev: tJev } });
+        return text(
+          `Showing ${issues.length} ${team.key} issue${issues.length === 1 ? "" : "s"} as a ${comp.view} view${how}, scope ${comp.scope} (${who}; Linear ${tFetch}, Jev ${tJev}). The card is the answer: reply with one short line or nothing. Never restate its fields.`,
+          { kind: "view", task: params.task, team: team.key, issues, options: optionsOf(meta), ...(project ? { project: { name: project.name, ...(project.lead ? { lead: project.lead } : {}), ...(project.targetDate ? { targetDate: project.targetDate } : {}), ...(project.summary ? { description: project.summary } : {}) } } : {}), composition: comp, timing: { linear: tFetch, jev: tJev } },
+        );
+      } catch (err) { return failure(err, "read Linear for the view"); }
+    },
+  ));
+
+  /* ---- linearcards_issue ---- */
+  api.registerTool(withResolvedAuth(
+    {
+      name: "linearcards_issue",
+      label: "Linear issue card",
+      description:
+        "Show one Linear issue in the chat as Linear's own issue view. Call this FIRST with just the identifier: it reads the issue and the team's pick lists itself (no linear:// read needed) and the card draws it with live pills. Use for 'show NEAT-9', 'what's the status of NEAT-9', 'open NEAT-9', and for 'comment on NEAT-9 that …' (pass commentDraft). After it returns, reply with at most one short line.",
+      parameters: {
+        type: "object",
+        properties: {
+          identifier: { type: "string", description: "Issue identifier, e.g. NEAT-9." },
+          commentDraft: { type: "string", description: "Prefill the card's comment box with this text; the person presses Comment to post. Optional." },
         },
+        required: ["identifier"],
       },
-      required: ["team", "title", "state", "priority"],
     },
-    async execute(_id, params) {
-      return text(
-        `Draft of "${params.title}" shown as Linear's create dialog. Stop here. The person edits it on the card and presses Create issue; the card then sends a message with the final values. Create the issue only when that message arrives, then show the result with linearcards_issue.`,
-      );
+    LINEAR_AUTH,
+    async (_id: string, params: ToolParams, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any, auth: { accessToken: string }) => {
+      const t0 = Date.now();
+      try {
+        const { meta } = await context(auth.accessToken, undefined, params.identifier, ctx, signal);
+        const [issue] = await readIssues(auth.accessToken, { id: meta.id, key: meta.key, name: meta.name }, { identifiers: [params.identifier], limit: 1 }, signal);
+        if (!issue) return text(`No issue ${params.identifier} is visible to Bonsai's Linear account. Say so in one line.`, { error: `No issue ${params.identifier}.` });
+        const full = { ...issue, options: optionsOf(meta), ...(params.commentDraft ? { commentDraft: params.commentDraft } : {}) };
+        return text(`Showing ${issue.identifier} as a Linear issue card (Linear ${ms(t0)}). The card is the answer: reply with one short line or nothing.`, { kind: "issue", issue: full, timing: { linear: ms(t0) } });
+      } catch (err) { return failure(err, `read ${params.identifier}`); }
     },
-  });
-};
+  ));
+
+  /* ---- linearcards_newissue ---- */
+  api.registerTool(withResolvedAuth(
+    {
+      name: "linearcards_newissue",
+      label: "Linear new issue",
+      description:
+        "Draft a new Linear issue in the chat as Linear's create dialog. Call this FIRST, in your first step, with the person's words plus a short title: it reads the team's states, projects, labels and members itself (no linear:// or mcp reads, no repo research), Jev picks status, priority, project, labels and assignee from the task, and the person edits the card and presses Create issue. Do not create anything yourself. After it returns, stop; the card sends a 'Create Linear issue' message when the person is ready.",
+      parameters: {
+        type: "object",
+        properties: {
+          task: { type: "string", description: "The person's request, in their words." },
+          title: { type: "string", description: "A title of at most 80 characters, in Linear's style. Derived from the task when omitted." },
+          description: { type: "string", description: "At most three short lines of Markdown, only when the task gives real detail. Omit otherwise; the person edits the card." },
+          team: { type: "string", description: "Team key or name, only when the ask names one. Omit otherwise." },
+        },
+        required: ["task"],
+      },
+    },
+    LINEAR_AUTH,
+    async (_id: string, params: ToolParams, signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any, auth: { accessToken: string }) => {
+      const t0 = Date.now();
+      try {
+        const { team, meta } = await context(auth.accessToken, params.team, params.task, ctx, signal);
+        const tFetch = ms(t0);
+        const title = (params.title?.trim() || deriveTitle(params.task)).slice(0, 120);
+        const description = params.description?.trim() ?? "";
+        const defaultState = meta.states.find((s) => s.type === "unstarted") ?? meta.states.find((s) => s.type === "backlog") ?? meta.states[0];
+        const fallback = () => ({
+          state: defaultState?.name, priority: guessPriority(params.task), project: undefined as string | undefined, labels: [] as string[],
+          assignee: /\b(me|my|myself|i'?ll)\b/i.test(params.task) || meta.members.length === 1 ? meta.viewer : undefined, by: "fallback" as const,
+        });
+        const tJev0 = Date.now();
+        const picks = await withJev(
+          async (jev: any) => {
+            const projectCriteria: Record<string, string> = { none: "The task does not belong to any listed project." };
+            for (const p of meta.projects.slice(0, 12)) projectCriteria[p.name] = p.summary ? `Belongs to "${p.name}": ${p.summary}` : `Belongs to the project named "${p.name}".`;
+            const stateCriteria: Record<string, string> = {};
+            for (const s of meta.states.filter((s) => s.type !== "completed" && s.type !== "canceled")) stateCriteria[s.name] = s.type === "unstarted" ? `Normal new work, ready to pick up (${s.name}). The default.` : s.type === "backlog" ? `Someday, not now, parked, low commitment (${s.name}).` : s.type === "started" ? `Already being worked on right now (${s.name}).` : `Needs triage first (${s.name}).`;
+            const questions: Record<string, any> = {
+              priority: { type: "choice", instructions: "Which priority does the task state or imply? Explicit words win: 'urgent', 'high', 'medium', 'low'. Without a word: a blocker or outage -> urgent; a must-do soon -> high; ordinary work -> medium; nice-to-have -> low; no signal -> none.", criteria: { none: "No priority stated or implied.", urgent: "Urgent, critical, blocker, ASAP, P0.", high: "High, important, soon, P1.", medium: "Medium, normal, P2, or ordinary planned work.", low: "Low, minor, someday, P3." } },
+              state: { type: "choice", instructions: `Which workflow state should the new issue start in? Default to the ordinary 'ready to pick up' state unless the task says it is already in progress or parked for later.`, criteria: stateCriteria },
+              project: { type: "choice", instructions: "Which project does this issue belong to, judged by its name and summary against the task? Choose none when no project fits well.", criteria: projectCriteria },
+              assignToMe: { type: "bool", instructions: "Should the issue be assigned to the person asking?", criteria: { true: "The task says me, my, I will, mine, or the team has one member who does everything.", false: "The task names someone else or says nothing about ownership on a multi-person team." } },
+            };
+            for (const l of meta.labels.slice(0, 8)) questions[`label:${l.name}`] = { type: "bool", instructions: `Apply the label "${l.name}"?`, criteria: { true: l.description ? `The task matches this label: ${l.description}` : `The task is about ${l.name.toLowerCase()}.`, false: "The label does not fit the task." } };
+            const { answers } = await jev.classify({ state: { task: params.task, title, description, teamMembers: meta.members, viewer: meta.viewer }, questions });
+            if (answers.priority?.type !== "choice") return undefined;
+            const pr = { none: 0, urgent: 1, high: 2, medium: 3, low: 4 }[answers.priority.choice as string] ?? 0;
+            const explicit = guessPriority(params.task);
+            const labels = meta.labels.slice(0, 8).filter((l) => answers[`label:${l.name}`]?.type === "bool" && answers[`label:${l.name}`].probability >= 0.6).map((l) => l.name);
+            const project = answers.project?.type === "choice" && answers.project.choice !== "none" && answers.project.confidence >= 0.4 ? answers.project.choice : undefined;
+            const assignee = answers.assignToMe?.type === "bool" && answers.assignToMe.probability >= 0.5 ? meta.viewer : undefined;
+            return { state: answers.state?.type === "choice" ? answers.state.choice : defaultState?.name, priority: explicit || pr, project, labels, assignee, by: "jev" as const, confidence: answers.priority.confidence };
+          },
+          fallback,
+          { timeoutMs: 6000, purpose: "linear-new-issue", ...(signal ? { signal } : {}) },
+        );
+        const tJev = ms(tJev0);
+        const draft = { team: team.key, title, description, state: picks.state, priority: picks.priority, ...(picks.assignee ? { assignee: picks.assignee } : {}), ...(picks.project ? { project: picks.project } : {}), labels: picks.labels, options: optionsOf(meta) };
+        const summary = [draft.state, ["No priority", "Urgent", "High", "Medium", "Low"][draft.priority], draft.project, draft.labels.join(", "), draft.assignee].filter(Boolean).join(" · ");
+        return text(
+          `Draft "${title}" shown as Linear's create dialog with ${summary} (${picks.by === "jev" ? "Jev picked" : "default pick"}; Linear ${tFetch}, Jev ${tJev}). Stop here with at most one short line. The person edits the card and presses Create issue; a 'Create Linear issue' message then arrives with the final JSON. Only then create it: mcp(server: "linear", tool: "save_issue", args: {team, title, description, state, priority, assignee, project, labels}), then call linearcards_issue with the new identifier.`,
+          { kind: "draft", draft, picks: { by: picks.by, confidence: (picks as any).confidence }, timing: { linear: tFetch, jev: tJev } },
+        );
+      } catch (err) { return failure(err, "prepare the draft"); }
+    },
+  ));
+}
+
+export default activate;
