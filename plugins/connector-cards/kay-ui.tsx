@@ -423,7 +423,7 @@ function ComposedView({ ctx, note }) {
         {fu.picked("create") && options ? <Tab on={creating} onClick={() => setCreating((c) => !c)}>+ New issue</Tab> : null}
       </span>
       <span style={{ display: "inline-flex", gap: 2 }}>
-        {["open", "active", "done", "all"].map((sc) => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
+        {(Array.isArray(comp.scopes) && comp.scopes.length ? comp.scopes : ["open", "active", "done", "all"]).map((sc) => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
       </span>
     </div>;
   const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options } } }} /> : null;
@@ -823,7 +823,8 @@ function EventRow({ e, tz, open, onToggle, ctx, fields }) {
       {open ? <div style={{ margin: "2px 0 8px 28px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: e } }} event={e} /></div> : null}
     </div>;
 }
-var CHIPS = [["today", "Today"], ["tomorrow", "Tomorrow"], ["rest_of_week", "This week"], ["next_week", "Next week"], ["this_month", "Month"], ["invites", "Invites"]];
+var GOLDEN_CHIPS = ["today", "tomorrow", "rest_of_week", "next_week", "this_month", "invites", "free"];
+var CHIP_LABEL = { ...RANGE_LABEL, this_month: "Month", next_month: "Next month", invites: "Invites", free: "Find a time" };
 function weekdayOf(ymd) {
   return (/* @__PURE__ */ new Date(`${ymd}T12:00:00Z`)).getUTCDay();
 }
@@ -892,23 +893,25 @@ function Agenda({ ctx, note }) {
   const t0 = d.timing;
   const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : "");
   const fields = comp.fields;
-  const chips = <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-      {CHIPS.map(([k, label2]) => <Tab2 key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : mode === "agenda" && range === k)} onClick={() => {
+  const pending = all.filter((e) => e.myResponse === "needsAction").length;
+  const chipKeys = Array.isArray(comp.chips) && comp.chips.length ? comp.chips : GOLDEN_CHIPS.filter((k) => k !== "invites" || pending > 0);
+  const isOn = (k) => k === "free" ? mode === "free" : k === "this_month" ? mode === "month" && monthIx === 0 : k === "next_month" ? mode === "month" && monthIx === 1 : mode === "agenda" && range === k;
+  const go = (k) => {
     setOpenKey(null);
-    if (k === "this_month") {
+    if (k === "free") setMode("free");
+    else if (k === "this_month" || k === "next_month") {
       setMode("month");
-      setMonthIx(0);
+      setMonthIx(k === "next_month" ? 1 : 0);
     } else {
       setMode("agenda");
       setRange(k);
     }
-  }}>{label2}</Tab2>)}
-      <Tab2 on={mode === "free"} onClick={() => {
-    setOpenKey(null);
-    setMode("free");
-  }}>Find a time</Tab2>
-      {fu.picked("create") && writable.length && mode !== "free" ? <Tab2 on={creating} onClick={() => setCreating((c) => !c)}>+ New event</Tab2> : null}
-    </div>;
+  };
+  const showCreate = fu.picked("create") && writable.length > 0 && mode !== "free";
+  const chips = chipKeys.length > 1 || showCreate ? <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+      {chipKeys.map((k) => <Tab2 key={k} on={isOn(k)} onClick={() => go(k)}>{k === "invites" && pending ? `Invites \xB7 ${pending}` : CHIP_LABEL[k] ?? k}</Tab2>)}
+      {showCreate ? <Tab2 on={creating} onClick={() => setCreating((c) => !c)}>+ New event</Tab2> : null}
+    </div> : null;
   if (mode === "free") {
     const free = d.free ?? freeFromEvents(all, tz, now, 30);
     const cals = (Array.isArray(d.calendars) ? d.calendars : []).filter((c) => c.writable);
@@ -1225,9 +1228,9 @@ function InboxView({ ctx, note }) {
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
         <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
-          {["all", "mentions", "dms"].map((f) => <Tab3 key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>)}
+          {(Array.isArray(comp.focuses) && comp.focuses.length ? comp.focuses : ["all", "mentions", "dms"]).map((f) => <Tab3 key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>)}
           <span style={{ flex: 1 }} />
-          {["today", "3_days", "week", "2_weeks"].map((r) => <Tab3 key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL2[r]}</Tab3>)}
+          {(Array.isArray(comp.ranges) && comp.ranges.length ? comp.ranges : ["today", "3_days", "week", "2_weeks"]).map((r) => <Tab3 key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL2[r]}</Tab3>)}
         </div>
         {!groups.length ? <div style={{ ...muted, padding: 8 }}>{focus === "mentions" ? "No mentions" : focus === "dms" ? "No direct messages" : "Nothing"} {(RANGE_LABEL2[range] ?? range).toLowerCase()}.</div> : null}
         {groups.map(([id, items]) => {

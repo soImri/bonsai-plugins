@@ -13,6 +13,7 @@
 import { HttpError, defineConnector, classify, ms, type Run, type CardResult, remembered } from "../../runtime.ts";
 import { SlackError, findChannel, postMessage, react, readChannel, readInbox, readMeta, readThread, type Channel, type Message, type Meta } from "./api.ts";
 import { RANGE_DAYS, RANGE_LABEL, draftRubric, viewRubric, type Composition, type Picks } from "./rubrics.ts";
+import { inboxChips, inboxFollowUps } from "./rubrics.ts";
 import { parseCardMessage } from "./write.ts";
 
 const CHANNEL_REF = /(?:^|\s)#[a-z0-9][\w.'-]{1,}/i;
@@ -80,10 +81,11 @@ export const slack = defineConnector({
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
     const [{ value, took: tJev }, fu] = await Promise.all([
       remembered(recall, () => jev({ purpose: "slack-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess)),
-      followUps("slack-follow-ups", { task }, []),
+      followUps("slack-follow-ups", { task, shape: view }, view === "inbox" ? inboxFollowUps(task) : []),
     ]);
     const comp = value as Composition;
     comp.followUps = fu.actions;
+    if (view === "inbox") Object.assign(comp, inboxChips(comp, fu.actions));
     if (typeof f.days === "string" && /^\d+$/.test(f.days)) comp.range = (Object.entries(RANGE_DAYS).find(([, d]) => d >= Number(f.days))?.[0] as any) ?? "2_weeks";
     // What the initial filter shows, for the agent's one line and for the pick log; the card recomputes the same.
     const cutoff = Date.now() - (RANGE_DAYS[comp.range] + (comp.range === "today" ? 1 : 0)) * 864e5;

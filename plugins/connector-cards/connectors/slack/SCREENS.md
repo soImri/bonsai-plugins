@@ -20,7 +20,7 @@
 | Screen | Native controls (always) | Follow-up candidates |
 | --- | --- | --- |
 | Channel / thread | composer, threads open in place with reply box, reactions and quick reactions, open-in-Slack | none yet |
-| Inbox | All / Mentions / DMs and range chips, conversations expand in place with composer | none yet |
+| Inbox | focus and range chips cut to the ask (asked + neighbour; all for a general catch-up), conversations expand in place with composer | none yet |
 
 **Card messages (writes only):** `Post in #name:` + body · `Reply in #name <ts>:` + body · `React to #name <ts>: :emoji:`.
 

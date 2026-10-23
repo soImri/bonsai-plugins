@@ -19,7 +19,7 @@
 | Screen | Native controls (always) | Follow-up candidates (`when`) |
 | --- | --- | --- |
 | Issue | status, priority, assignee, project, labels pickers; comment box (collapsed button); Save | `comment`: the box opens ready to type (answering, feedback, an update; always when a draft is passed) |
-| List / board / project | List/Board/Project tabs, group picker, scope tabs, inline pickers on every row, rows expand in place, Save | `create`: a `+ New issue` button opens the create dialog in the card (planning, grooming, "add", "file") |
+| List / board / project | List/Board/Project tabs, group picker, scope tabs cut to the ask (asked scope + neighbour; all four for a general look), inline pickers on every row, rows expand in place, Save | `create`: a `+ New issue` button opens the create dialog in the card (planning, grooming, "add", "file") |
 | Create | title, description, all five property pickers | none |
 
 **Card messages:** `Save NEAT-10: status → …; labels → …` · `Comment on NEAT-10:` + body · `Create in NEAT: <title>` + properties line + optional `Description:` block · `Show NEAT-7`.

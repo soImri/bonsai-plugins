@@ -15,6 +15,8 @@ export type Composition = {
   by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string;
   /** The follow-ups the card offers beside its primary surface (ids from issueFollowUps / listFollowUps / draftFollowUps). */
   followUps?: string[];
+  /** The scope tabs this card shows: the asked scope and its neighbour; all four for a general look. */
+  scopes?: Scope[];
 };
 
 /* ---------- follow-ups: additive secondary actions. The screen's own controls (pills, rows, tabs, Save) are always there and always live; a follow-up only adds something. ---------- */
@@ -27,10 +29,20 @@ export function issueFollowUps(task: string, issue?: { commentDraft?: string }):
   ];
 }
 /** A list or board: a + New issue button opens Linear's create dialog inside the card. */
+const SCOPE_NEIGHBOUR: Record<Scope, Scope> = { open: "active", active: "open", done: "all", all: "open" };
+/** The asked scope and its neighbour, or all four for a general look. */
+export function scopesFor(comp: { scope: Scope }, picked: string[]): Scope[] {
+  if (picked.includes("full_navigation")) return ["open", "active", "done", "all"];
+  const order: Scope[] = ["open", "active", "done", "all"];
+  const set = new Set<Scope>([comp.scope, SCOPE_NEIGHBOUR[comp.scope] ?? "open"]);
+  return order.filter((s) => set.has(s));
+}
 export function listFollowUps(task: string, comp: Composition, n: number): FollowUp[] {
   const w = t(task);
   void comp;
+  const named = /\b(open|progress|active|done|closed|completed|shipped|backlog|todo|triage|urgent|bug|project|mine|my |assigned)\b/.test(w);
   return [
+    { id: "full_navigation", label: "move between open, in progress, done and all from here (all four scope tabs)", when: "A general look with no scope named: 'show my Linear', 'the NEAT board', 'what's going on in Linear', 'overview'.", unless: "The ask names a scope (open, in progress, done, backlog) or a specific topic: then only that scope and its neighbour are offered.", guess: !named },
     { id: "create", label: "add a new issue from here (a + New issue button opens the create dialog in the card)", when: "Planning, grooming or triage where new work usually comes up; the person said they want to add or file something; the context mentions a new idea or task.", unless: "A status check, an overview, a standup read-out.", guess: /\b(add|new|create|file|plan|groom)\w*/.test(w) && n < 40 },
   ];
 }

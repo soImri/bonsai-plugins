@@ -10,7 +10,7 @@
  */
 import { HttpError, defineConnector, classify, ms, remembered, type Run, type CardResult } from "../../runtime.ts";
 import { ISSUE_FIELDS, PRIORITY_NAMES, normalizeIssue, optionsOf, readIssues, teamContext, type Issue } from "./read.ts";
-import { createRubric, deriveTitle, issueFollowUps, listFollowUps, settle, viewRubric, type Composition, type Picks } from "./rubrics.ts";
+import { createRubric, deriveTitle, issueFollowUps, listFollowUps, scopesFor, settle, viewRubric, type Composition, type Picks } from "./rubrics.ts";
 import { applyChange, createIssue, describeChange, parseCardMessage, postComment, type Change, type Comment, type Create } from "./write.ts";
 import { mcpCall } from "./mcp.ts";
 
@@ -53,6 +53,7 @@ export const linear = defineConnector({
     ]);
     const { comp, issues } = settle(value as Composition, all);
     comp.followUps = fu.actions;
+    comp.scopes = scopesFor(comp, fu.actions);
     const project = comp.view === "project" ? (meta.projects.find((p) => p.name.toLowerCase() === (f.project ?? issues[0]?.project ?? "").toLowerCase()) ?? (f.project ? { name: f.project } : undefined)) : undefined;
     const who = comp.by === "jev" ? `Jev picked, ${comp.variant} questions answered` : "default pick, Jev unavailable";
     const how = comp.view === "board" || comp.view === "project" ? ` grouped by ${comp.groupBy}` : "";

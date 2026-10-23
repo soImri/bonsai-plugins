@@ -5,14 +5,14 @@
  * by Jev. Jev picks the shape of the feed: how far back, whether only mentions or DMs, which
  * fields, and for a draft, which channel among the likely ones.
  */
-import { choiceOf, yesOf, type JevAnswers, type JevQuestion } from "../../runtime.ts";
+import { choiceOf, yesOf, type FollowUp, type JevAnswers, type JevQuestion } from "../../runtime.ts";
 import type { Channel, Message } from "./api.ts";
 
 export type Range = "today" | "yesterday" | "3_days" | "week" | "2_weeks";
 export const RANGE_LABEL: Record<Range, string> = { today: "Today", yesterday: "Yesterday", "3_days": "Last 3 days", week: "This week", "2_weeks": "Last 2 weeks" };
 export const RANGE_DAYS: Record<Range, number> = { today: 0, yesterday: 1, "3_days": 3, week: 7, "2_weeks": 14 };
 
-export type Composition = { view: "inbox" | "channel" | "thread"; range: Range; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean; followUps?: string[] }; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string };
+export type Composition = { view: "inbox" | "channel" | "thread"; range: Range; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean; followUps?: string[]; focuses?: string[]; ranges?: string[] }; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string };
 
 export function guessRange(task: string): Range {
   const t = task.toLowerCase();
@@ -65,4 +65,20 @@ export function draftRubric(task: string, text: string, candidates: Channel[]) {
     return { channel: named?.id ?? c?.id ?? guess().channel, by: "jev", confidence: answers.channel.confidence, variant };
   };
   return { state, questions, read, guess, named };
+}
+
+/* ---------- navigation: which chips the inbox shows (the chip row is our adaptation, tailored to the ask) ---------- */
+const NEXT_RANGE: Record<string, string> = { today: "3_days", yesterday: "3_days", "3_days": "week", week: "2_weeks", "2_weeks": "week" };
+export function inboxChips(comp: { focus: string; range: string }, picked: string[]): { focuses: string[]; ranges: string[] } {
+  if (picked.includes("full_navigation")) return { focuses: ["all", "mentions", "dms"], ranges: ["today", "3_days", "week", "2_weeks"] };
+  const focuses = ["all", "mentions", "dms"].filter((f) => f === comp.focus || f === "all");
+  const r = new Set([comp.range, NEXT_RANGE[comp.range] ?? "week"]);
+  return { focuses, ranges: ["today", "3_days", "week", "2_weeks"].filter((k) => r.has(k)) };
+}
+export function inboxFollowUps(task: string): FollowUp[] {
+  const w = task.toLowerCase();
+  const named = /\b(dm|dms|direct|mention|mentions|for me|today|yesterday|week|days|since|while)\b/.test(w);
+  return [
+    { id: "full_navigation", label: "move around the whole inbox (All / Mentions / DMs and every range offered)", when: "A general catch-up with no focus or range named: 'catch me up on Slack', 'what did I miss', 'anything new on Slack'.", unless: "The ask names DMs, mentions, 'for me', or a range: then only that focus and its neighbour are offered.", guess: !named },
+  ];
 }

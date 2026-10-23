@@ -35,6 +35,10 @@ In `rubrics.ts` export them as `FollowUp[]` factories. In `index.ts` call `run.f
 
 The test: three asks with different `context` lines produce the same native controls every time and differ only in what was added. Then repeat one plain ask three times: the third must come from memory (`debug.decidedBy: "memory"`, `timing.jev: "0 ms"`).
 
+## 2c. Navigation is tailored; the screen is not
+
+A list-type card has two layers. The screen (rows, pills, composers, click-to-edit, Save) is the app's own: always complete, always live. The navigation row (range chips, scope tabs, focus filters) is our adaptation and is cut to the ask: the asked range or scope plus its neighbour, peripheral information only when it exists (a pending-invites count), plus what Jev adds for this ask. The full set, the *golden* navigation, is drawn only for a general look ("show my calendar"), via a `full_navigation` candidate in the follow-up rubric. Compute the set in `rubrics.ts` (see `chipsFor` in gcal, `scopesFor` in linear, `inboxChips` in slack), put it on the composition, and draw exactly that in `ui.tsx`. A row with one chip is not drawn. Add evals that pin the set for a named ask and the golden set for a general one.
+
 ## 3. Scaffold
 
 `node tools/new-connector.mjs <id> "<Label>" <serviceId> <schemeId>` creates `connectors/<id>/{index.ts, api.ts, rubrics.ts, write.ts, ui.tsx, SCREENS.md, evals.json}` from the template, registers the id in `connectors/index.ts` and `connectors/ui.ts`, and adds the auth entry to the manifest. Fill in the TODOs; the template's comments say what each export is for.

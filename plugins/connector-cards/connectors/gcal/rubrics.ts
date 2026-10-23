@@ -93,7 +93,9 @@ export function guessRange(task: string): Range {
 }
 
 /* ---------- the view rubric ---------- */
-export type Composition = { view: "agenda" | "event" | "month" | "free"; range: Range; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly: boolean }; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string; followUps?: string[] };
+export type Composition = { view: "agenda" | "event" | "month" | "free"; range: Range; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly: boolean }; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string; followUps?: string[];
+  /** The navigation chips this card shows (range keys plus "invites", "free"): the asked range and its neighbour, peripheral info that exists, what Jev added; the full set only for a general look. */
+  chips?: string[] };
 
 export function guessView(task: string, range: Range): Composition["view"] {
   if (/\b(free|available|availability|open slot|find (a )?time|when can|fit in|book a time)\b/i.test(task)) return "free";
@@ -145,12 +147,31 @@ export function createRubric(task: string, title: string, hasEnd: boolean, atten
 }
 
 
-/* ---------- follow-ups: additive secondary actions. The screen's own controls (range chips, Find a time, click-to-edit, RSVP, the create dialog's fields) are always there and always live; a follow-up only adds something. ---------- */
+/* ---------- navigation: which chips a card shows. The chip row is our adaptation, not Google Calendar's own screen, so it is tailored to the ask. ---------- */
+export const GOLDEN_CHIPS = ["today", "tomorrow", "rest_of_week", "next_week", "this_month", "invites", "free"];
+const CHIP_ORDER = ["yesterday", "past_week", "today", "tomorrow", "rest_of_week", "next_7_days", "next_week", "next_14_days", "this_month", "next_month", "invites", "free"];
+const NEIGHBOUR: Record<string, string[]> = { today: ["tomorrow"], tomorrow: ["rest_of_week"], rest_of_week: ["next_week"], next_week: ["rest_of_week"], next_7_days: ["next_14_days"], next_14_days: ["this_month"], yesterday: ["today"], past_week: ["rest_of_week"], this_month: ["next_month"], next_month: ["this_month"], day: [], invites: ["rest_of_week"] };
+/** The asked range + its neighbour, "Invites · N" when invitations are pending, plus what Jev added (find / month); the golden set for a general look. */
+export function chipsFor(comp: { view: string; range: string; fields: { invitesOnly?: boolean } }, picked: string[], pendingInvites: number): string[] {
+  if (picked.includes("full_navigation")) return GOLDEN_CHIPS.filter((k) => k !== "invites" || pendingInvites > 0 || comp.fields.invitesOnly);
+  const active = comp.view === "free" ? "free" : comp.fields.invitesOnly ? "invites" : comp.range;
+  const set = new Set<string>([active, ...(NEIGHBOUR[comp.range] ?? [])]);
+  if (comp.view === "free") set.add("rest_of_week");
+  if (pendingInvites > 0) set.add("invites");
+  if (picked.includes("find")) set.add("free");
+  if (picked.includes("month")) set.add("this_month");
+  return CHIP_ORDER.filter((k) => set.has(k));
+}
+
+/* ---------- follow-ups: additive secondary actions./* ---------- follow-ups: additive secondary actions. The screen's own controls (range chips, Find a time, click-to-edit, RSVP, the create dialog's fields) are always there and always live; a follow-up only adds something. ---------- */
 /** An agenda or month card: a + New event button opens the create dialog inside the card. */
 export function agendaFollowUps(task: string, view: string): FollowUp[] {
   const w = task.toLowerCase();
-  if (view === "free") return [];
+  const named = /\b(today|tomorrow|yesterday|week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|invit|free|available|\d{1,2}(st|nd|rd|th)?\b|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/.test(w);
   return [
-    { id: "create", label: "add a new event from here (a + New event button opens the create dialog in the card)", when: "Planning or blocking time: 'add', 'put', 'block', 'book', a task to fit in, a prep block before a meeting the context names.", unless: "A plain look at the day or week.", guess: /\b(add|put|block|book|new event|create|fit in|prep)\w*/.test(w) },
+    { id: "full_navigation", label: "move around the whole calendar (today, tomorrow, this week, next week, month, invites, find a time all offered)", when: "A general look with no range named: 'show my calendar', 'my schedule', 'what's going on', 'open my calendar'.", unless: "The ask names a day, a week, a month, invitations, or free time: then only that range and its neighbour are offered.", guess: !named },
+    ...(view === "free" ? [] : [{ id: "find", label: "find a free time from here (a Find a time chip)", when: "Scheduling intent beside the look: fitting a call in, 'when can I', someone to meet, a slot to find, the context says they want to book something.", unless: "A plain look at the day or week.", guess: /\b(find|free|available|availability|book|schedule|slot|when can|fit)\w*/.test(w) } as FollowUp]),
+    ...(view === "month" ? [] : [{ id: "month", label: "zoom out to the month grid (a Month chip)", when: "The ask spans more than two weeks, mentions the month, planning ahead, travel, or a date beyond next week.", unless: "The ask is about today, tomorrow or this week.", guess: /\b(month|ahead|upcoming|travel|trip|rest of)\w*/.test(w) } as FollowUp]),
+    ...(view === "free" ? [] : [{ id: "create", label: "add a new event from here (a + New event button opens the create dialog in the card)", when: "Planning or blocking time: 'add', 'put', 'block', 'book', a task to fit in, a prep block before a meeting the context names.", unless: "A plain look at the day or week.", guess: /\b(add|put|block|book|new event|create|fit in|prep)\w*/.test(w) } as FollowUp]),
   ];
 }

@@ -339,7 +339,8 @@ function EventRow({ e, tz, open, onToggle, ctx, fields }: { e: Event; tz: string
 
 /* ---------- CalendarCard: the agenda with in-card ranges, the month grid, and Find a time ---------- */
 type RangeKey = "today" | "tomorrow" | "rest_of_week" | "next_week" | "this_month" | "next_month" | "invites" | "day" | "next_7_days" | "next_14_days" | "yesterday" | "past_week";
-const CHIPS: [RangeKey, string][] = [["today", "Today"], ["tomorrow", "Tomorrow"], ["rest_of_week", "This week"], ["next_week", "Next week"], ["this_month", "Month"], ["invites", "Invites"]];
+const GOLDEN_CHIPS = ["today", "tomorrow", "rest_of_week", "next_week", "this_month", "invites", "free"];
+const CHIP_LABEL: Record<string, string> = { ...RANGE_LABEL, this_month: "Month", next_month: "Next month", invites: "Invites", free: "Find a time" };
 function weekdayOf(ymd: string) { return new Date(`${ymd}T12:00:00Z`).getUTCDay(); }
 function boundsFor(r: RangeKey, now: string, months: MonthInfo[], dayPick?: string): [string, string] {
   const today = now.slice(0, 10);
@@ -385,13 +386,18 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const t0 = d.timing as Record<string, string> | undefined;
   const caption = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : "");
   const fields = comp.fields;
-  const chips = (
+  // The navigation this ask earned: the asked range and its neighbour, invites only when some are pending, Find a time / Month when Jev added them; the full set for a general look. Every chip is live.
+  const pending = all.filter(e => e.myResponse === "needsAction").length;
+  const chipKeys: string[] = Array.isArray(comp.chips) && comp.chips.length ? comp.chips : GOLDEN_CHIPS.filter(k => k !== "invites" || pending > 0);
+  const isOn = (k: string) => k === "free" ? mode === "free" : k === "this_month" ? mode === "month" && monthIx === 0 : k === "next_month" ? mode === "month" && monthIx === 1 : mode === "agenda" && range === k;
+  const go = (k: string) => { setOpenKey(null); if (k === "free") setMode("free"); else if (k === "this_month" || k === "next_month") { setMode("month"); setMonthIx(k === "next_month" ? 1 : 0); } else { setMode("agenda"); setRange(k as RangeKey); } };
+  const showCreate = fu.picked("create") && writable.length > 0 && mode !== "free";
+  const chips = chipKeys.length > 1 || showCreate ? (
     <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-      {CHIPS.map(([k, label]) => <Tab key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : (mode === "agenda" && range === k))} onClick={() => { setOpenKey(null); if (k === "this_month") { setMode("month"); setMonthIx(0); } else { setMode("agenda"); setRange(k); } }}>{label}</Tab>)}
-      <Tab on={mode === "free"} onClick={() => { setOpenKey(null); setMode("free"); }}>Find a time</Tab>
-      {fu.picked("create") && writable.length && mode !== "free" ? <Tab on={creating} onClick={() => setCreating(c => !c)}>+ New event</Tab> : null}
+      {chipKeys.map(k => <Tab key={k} on={isOn(k)} onClick={() => go(k)}>{k === "invites" && pending ? `Invites · ${pending}` : CHIP_LABEL[k] ?? k}</Tab>)}
+      {showCreate ? <Tab on={creating} onClick={() => setCreating(c => !c)}>+ New event</Tab> : null}
     </div>
-  );
+  ) : null;
   if (mode === "free") {
     const free = d.free ?? freeFromEvents(all, tz, now, 30);
     const cals = (Array.isArray(d.calendars) ? d.calendars : []).filter((c: Cal) => c.writable);

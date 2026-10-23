@@ -16,7 +16,7 @@ type Options = { states?: State[]; projects?: string[]; labels?: string[]; membe
 type Issue = { identifier: string; title: string; description?: string; url?: string; state: State; priority: number; assignee?: string; project?: string; labels?: string[]; createdAt?: string; completedAt?: string; options?: Options; commentDraft?: string; followUps?: string[] };
 type Draft = { team: string; title: string; description?: string; state?: string; priority: number; assignee?: string; project?: string; labels?: string[]; options?: Options; followUps?: string[] };
 type Fields = { description?: boolean; labels?: boolean; dates?: boolean; assignee?: boolean; project?: boolean };
-type Composition = { view: "issue" | "list" | "board" | "project"; groupBy?: "status" | "project" | "assignee" | "priority"; sort?: "priority" | "newest" | "none"; scope?: string; fields: Fields; by: "jev" | "fallback" | "memory"; confidence?: number; followUps?: string[] };
+type Composition = { view: "issue" | "list" | "board" | "project"; groupBy?: "status" | "project" | "assignee" | "priority"; sort?: "priority" | "newest" | "none"; scope?: string; fields: Fields; by: "jev" | "fallback" | "memory"; confidence?: number; followUps?: string[]; scopes?: string[] };
 type Props = { state?: State; priority: number; assignee?: string; project?: string; labels: string[] };
 
 const PRIORITIES = ["No priority", "Urgent", "High", "Medium", "Low"];
@@ -249,7 +249,7 @@ function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
         {fu.picked("create") && options ? <Tab on={creating} onClick={() => setCreating(c => !c)}>+ New issue</Tab> : null}
       </span>
       <span style={{ display: "inline-flex", gap: 2 }}>
-        {(["open", "active", "done", "all"] as Scope[]).map(sc => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
+        {((Array.isArray(comp.scopes) && comp.scopes.length ? comp.scopes : ["open", "active", "done", "all"]) as Scope[]).map(sc => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
       </span>
     </div>
   );

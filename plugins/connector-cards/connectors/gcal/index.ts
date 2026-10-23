@@ -11,7 +11,7 @@
 import { HttpError, defineConnector, classify, ms, type Run, type CardResult, remembered } from "../../runtime.ts";
 import { createEvent, deleteEvent, freeBusy, getEvent, listEvents, mergeAttendees, patchEvent, readMeta, rememberKeys, resolveKey, rsvp, type Busy, type Calendar, type Event, type EventBody } from "./api.ts";
 import { RANGE_LABEL, createRubric, dayBounds, dayStart, monthGrid, rangeBounds, toGoogleTime, tzParts, viewRubric, wall, type Composition, type Picks, type Range } from "./rubrics.ts";
-import { agendaFollowUps } from "./rubrics.ts";
+import { agendaFollowUps, chipsFor } from "./rubrics.ts";
 import { parseCardMessage, type EventChange, type EventCreate } from "./write.ts";
 
 const KEY = /#[0-9a-f]{6}\b/i;
@@ -170,6 +170,7 @@ export const gcal = defineConnector({
     ]);
     const comp = value as Composition;
     comp.followUps = fu.actions;
+    comp.chips = chipsFor(comp, fu.actions, all.filter((e) => e.myResponse === "needsAction").length);
     if (date) comp.range = "day";
     // Jev chose a month the heuristic did not fetch for: fetch the grid now (rare, one more round trip).
     const isMonth = comp.range === "this_month" || comp.range === "next_month";
@@ -201,6 +202,7 @@ export const gcal = defineConnector({
     const monthInfo = (mg: ReturnType<typeof monthGrid>) => ({ label: new Date(mg.first.getTime() + 36e5 * 12).toLocaleDateString("en-US", { timeZone: tz, month: "long", year: "numeric" }), gridStart: wall(mg.gridStart.toISOString(), tz).slice(0, 10), gridEnd: wall(mg.gridEnd.toISOString(), tz).slice(0, 10), first: wall(mg.first.toISOString(), tz).slice(0, 10), next: wall(mg.next.toISOString(), tz).slice(0, 10) });
     const months = [monthInfo(monthGrid(now, tz, 0)), monthInfo(nextGrid)];
     extra = { ...extra, month: monthInfo(g), months, window: { from: wall(window[0].toISOString(), tz), to: wall(window[1].toISOString(), tz) } };
+    comp.chips = chipsFor(comp, fu.actions, all.filter((e) => e.myResponse === "needsAction").length);
     const payload = { kind: "view", task, timeZone: tz, now: wall(now.toISOString(), tz), rangeLabel, calendars: cals, events, allEvents: all, composition: comp, ...extra, timing: { google: tGoogle, jev: tJev } };
     const picked = `${comp.view}, range ${comp.range}${comp.fields.attendees ? ", with guests" : ""}${comp.fields.location ? ", with locations" : ""}${comp.fields.invitesOnly ? ", invites only" : ""}`;
     const viewName = comp.view === "event" ? "an event card" : comp.view === "month" ? "a month grid" : comp.view === "free" ? "a find-a-time view" : "an agenda";
