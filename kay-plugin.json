@@ -3,7 +3,7 @@
   "id": "com.imrisofer.connector-cards",
   "displayName": "Connector cards",
   "description": "Connector-owned UI in the chat. Linear first: issue, list, board, project and create cards in Linear's own shape. One tool call per ask; the plugin reads Linear itself and Jev picks the view and fields at runtime.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "namespace": "linearcards",
   "compatibility": {
     "sdk": "^0.13.0"
