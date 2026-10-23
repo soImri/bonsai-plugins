@@ -19,6 +19,8 @@ const LINEAR_AUTH = { serviceId: "linear.account", schemeId: "linear.mcp-oauth" 
 const MCP_URL = "https://mcp.linear.app/mcp";
 const MCP_PROTOCOL = "2025-06-18";
 const META_TTL_MS = 10 * 60 * 1000;
+/** The hosted Jev route answers 400 to a rubric of more than 8 questions (measured 2026-10-23: 8 answered, 9 and 10 refused). */
+const JEV_MAX_QUESTIONS = 8;
 const ISSUE_LIMIT = 50;
 const DESCRIPTION_CAP = 700;
 
@@ -128,7 +130,17 @@ async function readMeta(token: string, team: TeamRef, viewer: string, dataDir: s
   const hit = metaCache.get(team.key);
   if (hit && Date.now() - hit.at < META_TTL_MS) return hit;
   const disk = hit ?? (await readDisk(dataDir, team.key));
-  if (disk) { metaCache.set(team.key, disk); if (Date.now() - disk.at < META_TTL_MS) return disk; }
+  if (disk) {
+    // Stale-while-revalidate: pick lists change rarely, so an old copy serves this call and a
+    // background refresh serves the next one. Keeps the plugin's part at one Linear round trip.
+    metaCache.set(team.key, disk);
+    if (Date.now() - disk.at >= META_TTL_MS) void fetchMeta(token, team, viewer, dataDir).catch(() => undefined);
+    return disk;
+  }
+  return fetchMeta(token, team, viewer, dataDir, signal);
+}
+
+async function fetchMeta(token: string, team: TeamRef, viewer: string, dataDir: string | undefined, signal?: AbortSignal): Promise<TeamMeta> {
   const t = team.name;
   const [s, l, p, u] = await Promise.all([
     mcpCall(token, "list_issue_statuses", { team: t }, signal),
@@ -249,7 +261,7 @@ type ToolParams = Record<string, any>;
  */
 async function classifyAdaptive(jev: any, state: object, questions: Record<string, any>): Promise<{ answers: Record<string, any>; variant: string }> {
   const keys = Object.keys(questions);
-  const sizes = [keys.length, 9, 8, 7, 6, 5, 4, 3, 2, 1].filter((n, i, a) => n >= 1 && n <= keys.length && a.indexOf(n) === i);
+  const sizes = [Math.min(keys.length, JEV_MAX_QUESTIONS), 6, 4, 2, 1].filter((n, i, a) => n >= 1 && n <= keys.length && a.indexOf(n) === i);
   let lastErr: unknown;
   for (const n of sizes) {
     try {
@@ -321,10 +333,10 @@ export function activate(api: any) {
                 sort: { type: "choice", instructions: "Order of the rows within the view or within each group.",
                   criteria: { priority: "Urgent first. The default for triage, open work, what to do next.", newest: "Most recently created first. The task is about what came in, what is new, recent activity.", none: "Keep Linear's order. The task does not care about order." } },
                 description: { type: "bool", instructions: "Show each issue's description text?", criteria: { true: "The task needs the body to judge or act (review, decide, understand one issue).", false: "Titles and properties are enough (scan, status, overview, triage)." } },
+                assignee: { type: "bool", instructions: "Show the assignee?", criteria: { true: "Ownership matters, more than one person is involved, or the task asks who.", false: "One person does everything here, or ownership is beside the point." } },
                 labels: { type: "bool", instructions: "Show labels?", criteria: { true: "The task mentions a label or category (bug, decision, design), or triage.", false: "Labels do not help the task." } },
                 dates: { type: "bool", instructions: "Show created and done dates?", criteria: { true: "Timing matters: recent, new, stale, how long, this week, deadlines.", false: "Timing does not matter." } },
-                assignee: { type: "bool", instructions: "Show the assignee?", criteria: { true: "Ownership matters, more than one person is involved, or the task asks who.", false: "One person does everything here, or ownership is beside the point." } },
-                project: { type: "bool", instructions: "Show the project of each issue?", criteria: { true: "Issues span more than one project, or the task mentions projects.", false: "All issues share one project, or the view already groups by project." } },
+                // 8 is the hosted route's limit; `project` (show the project column) comes from the heuristic.
               },
             );
             const pick = (k: string) => (answers[k]?.type === "choice" ? answers[k].choice : undefined);
@@ -427,14 +439,16 @@ export function activate(api: any) {
             const openStates = meta.states.filter((s) => s.type !== "completed" && s.type !== "canceled");
             const stateCriteria: Record<string, string> = {};
             openStates.forEach((s, i) => { stateCriteria[`s${i}`] = s.type === "unstarted" ? `"${s.name}": normal new work, ready to pick up. The default.` : s.type === "backlog" ? `"${s.name}": someday, not now, parked, low commitment.` : s.type === "started" ? `"${s.name}": already being worked on right now.` : `"${s.name}": needs triage first.`; });
-            const labelsAsked = meta.labels.slice(0, 8);
+            // Order = importance; the hosted route answers at most 8. Priority and project first, then
+            // the labels (where Jev adds the most), then state; assignee stays on the heuristic when cut.
+            const labelsAsked = meta.labels.slice(0, JEV_MAX_QUESTIONS - 3);
             const questions: Record<string, any> = {
               priority: { type: "choice", instructions: "Which priority does the task state or imply? Explicit words win: 'urgent', 'high', 'medium', 'low'. Without a word: a blocker or outage -> urgent; a must-do soon -> high; ordinary work -> medium; nice-to-have -> low; no signal -> none.", criteria: { none: "No priority stated or implied.", urgent: "Urgent, critical, blocker, ASAP, P0.", high: "High, important, soon, P1.", medium: "Medium, normal, P2, or ordinary planned work.", low: "Low, minor, someday, P3." } },
-              state: { type: "choice", instructions: "Which workflow state should the new issue start in? Default to the ordinary 'ready to pick up' state unless the task says it is already in progress or parked for later.", criteria: stateCriteria },
               project: { type: "choice", instructions: "Which project does this issue belong to, judged by its name and summary against the task? Choose none when no project fits well.", criteria: projectCriteria },
-              assignToMe: { type: "bool", instructions: "Should the issue be assigned to the person asking?", criteria: { true: "The task says me, my, I will, mine, or the team has one member who does everything.", false: "The task names someone else or says nothing about ownership on a multi-person team." } },
             };
             labelsAsked.forEach((l, i) => { questions[`label_${i}`] = { type: "bool", instructions: `Apply the label "${l.name}"?`, criteria: { true: l.description ? `The task matches this label: ${l.description}` : `The task is about ${l.name.toLowerCase()}.`, false: "The label does not fit the task." } }; });
+            questions.state = { type: "choice", instructions: "Which workflow state should the new issue start in? Default to the ordinary 'ready to pick up' state unless the task says it is already in progress or parked for later.", criteria: stateCriteria };
+            questions.assignToMe = { type: "bool", instructions: "Should the issue be assigned to the person asking?", criteria: { true: "The task says me, my, I will, mine, or the team has one member who does everything.", false: "The task names someone else or says nothing about ownership on a multi-person team." } };
             const { answers, variant } = await classifyAdaptive(jev, { task: params.task, title, description: description || "none", teamMembers: meta.members.join(", ") || "none", viewer: meta.viewer || "unknown" }, questions);
             if (answers.priority?.type !== "choice") return undefined;
             const pr = { none: 0, urgent: 1, high: 2, medium: 3, low: 4 }[answers.priority.choice as string] ?? 0;
@@ -443,7 +457,7 @@ export function activate(api: any) {
             const projectPick = answers.project?.type === "choice" && answers.project.choice !== "none" && answers.project.confidence >= 0.4 ? projects[Number(String(answers.project.choice).slice(1))] : undefined;
             const project = projectPick?.name;
             const statePick = answers.state?.type === "choice" ? openStates[Number(String(answers.state.choice).slice(1))] : undefined;
-            const assignee = answers.assignToMe?.type === "bool" && answers.assignToMe.probability >= 0.5 ? meta.viewer : undefined;
+            const assignee = answers.assignToMe?.type === "bool" ? (answers.assignToMe.probability >= 0.5 ? meta.viewer : undefined) : fallback().assignee;
             return { state: statePick?.name ?? defaultState?.name, priority: explicit || pr, project, labels, assignee, by: "jev" as const, confidence: answers.priority.confidence, variant };
           },
           fallback,
