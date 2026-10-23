@@ -35,7 +35,7 @@ Every card mimics the app's UI, never a form of fields. Edits batch behind Save;
 - `rubrics.ts`: what Jev is asked, most important first, at most 8 questions (the hosted route refuses more). Each answer has a heuristic twin, so a dropped question degrades to the heuristic, never to a hole. Choice criteria keys are plain tokens (`p0`, `s1`), mapped back after the answer.
 - `write.ts`: a card speaks a short human grammar in the chat (`Save <ref>: field → value; …`, `Create …: <title>` + a properties line); the plugin parses it, the agent passes it verbatim. Unit-check the parser with node before wiring it.
 - `index.ts`: `defineConnector({ id, label, summary, aliases, auth, triggers: { keywords, refPattern, messagePattern }, examples, filters, view, record, draft, apply })`. `apply` re-reads what it touched and returns a view/record payload so the card redraws from the app's truth.
-- `ui.tsx`: compositions drawn from the kit (`ui/kit.tsx`: card chrome, Picker, SaveBar, glyphs). Read the payload from `ctx.details`; send messages with `ctx.send`; open links with `ctx.openUrl`. Export `{ id, label, component, runningText }`.
+- `ui.tsx`: compositions drawn from the kit (`ui/kit.tsx`: card chrome, Picker, SaveBar, glyphs). Read the payload from `ctx.details`; send messages with `ctx.send`; open links with `ctx.openUrl`. Export `{ id, label, component, runningText }`. Then run `node tools/build-ui.mjs`: Bonsai bundles the UI entry from its text alone, so `kay-ui.tsx` is one generated file built from `ui/entry.tsx` and every connector's `ui.tsx`; commit the output, or the previous cards keep running.
 
 ## 5. Eval set
 
@@ -43,7 +43,7 @@ Every card mimics the app's UI, never a form of fields. Edits batch behind Save;
 
 ## 6. Test like a person
 
-A git commit in the plugin directory reloads the plugin (touching files or toggling the install does not). Subagents keep the parent's plugin generation, so test in fresh top-level sessions: `open_session` with a first message, then read its transcript for the tool call, its arguments, the result line and the timing. Check: one tool call and no reads before it; the connector routed as expected; the composition and fields Jev picked; the card's message round-trips through `cards_apply`. Then look at the cards yourself: the agent cannot see them, so never report a card as fixed from the transcript alone.
+Build the UI (`node tools/build-ui.mjs`), then commit: a git commit in the plugin directory reloads the plugin (touching files or toggling the install does not). Subagents keep the parent's plugin generation, so test in fresh top-level sessions: `open_session` with a first message, then read its transcript for the tool call, its arguments, the result line and the timing. Check: one tool call and no reads before it; the connector routed as expected; the composition and fields Jev picked; the card's message round-trips through `cards_apply`. Then look at the cards yourself: the agent cannot see them, so never report a card as fixed from the transcript alone.
 
 ## 7. Log picks for the loop
 

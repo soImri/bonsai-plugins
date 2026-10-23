@@ -53,4 +53,5 @@ Next:
            service: ${serviceId}
      Until it is granted, the whole agent target is refused (auth-grant-shared-identity-not-granted).
   3. node tools/eval.mjs ${id} --only parse   (then live cases from a fresh session)
-  4. git commit  → the plugin reloads; test in a fresh chat ("what's new in ${label}?").`);
+  4. node tools/build-ui.mjs   (kay-ui.tsx is generated from ui/ and every connector's ui.tsx; commit it)
+  5. git commit  → the plugin reloads; test in a fresh chat ("what's new in ${label}?").`);
