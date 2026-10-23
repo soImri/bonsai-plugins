@@ -3,7 +3,7 @@
   "id": "com.imrisofer.connector-cards",
   "displayName": "Connector cards",
   "description": "Connector cards: a connected app's own UI in the chat, for any connector. One tool call per ask; the plugin reads and writes the app itself through Bonsai's sign-in, and Jev picks the connector, the view and the fields at runtime. Linear and Google Calendar today; a scaffold adds more.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "namespace": "cards",
   "compatibility": {
     "sdk": "^0.13.0"

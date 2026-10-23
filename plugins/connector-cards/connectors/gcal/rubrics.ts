@@ -34,8 +34,24 @@ export function wall(iso: string | undefined, tz: string): string {
 }
 
 /* ---------- ranges ---------- */
-export type Range = "today" | "tomorrow" | "rest_of_week" | "next_week" | "next_7_days" | "next_14_days" | "yesterday" | "past_week";
-export const RANGE_LABEL: Record<Range, string> = { today: "Today", tomorrow: "Tomorrow", rest_of_week: "This week", next_week: "Next week", next_7_days: "Next 7 days", next_14_days: "Next 14 days", yesterday: "Yesterday", past_week: "Past week" };
+export type Range = "today" | "tomorrow" | "rest_of_week" | "next_week" | "next_7_days" | "next_14_days" | "yesterday" | "past_week" | "this_month" | "next_month" | "day";
+export const RANGE_LABEL: Record<Range, string> = { today: "Today", tomorrow: "Tomorrow", rest_of_week: "This week", next_week: "Next week", next_7_days: "Next 7 days", next_14_days: "Next 14 days", yesterday: "Yesterday", past_week: "Past week", this_month: "This month", next_month: "Next month", day: "Day" };
+
+/** Midnight at the start of the month `addMonths` from `d`'s month, in tz. */
+export function monthStart(d: Date, tz: string, addMonths = 0): Date {
+  const p = tzParts(d, tz);
+  const naive = Date.UTC(p.y, p.m - 1 + addMonths, 1, 0, 0, 0);
+  return new Date(naive - offsetMs(new Date(naive), tz));
+}
+/** The 6-week grid Google draws for a month: from the Sunday on or before the 1st to the Saturday on or after the last day. */
+export function monthGrid(d: Date, tz: string, addMonths = 0): { first: Date; next: Date; gridStart: Date; gridEnd: Date } {
+  const first = monthStart(d, tz, addMonths);
+  const next = monthStart(d, tz, addMonths + 1);
+  const gridStart = dayStart(first, tz, -tzParts(first, tz).wd);
+  const last = dayStart(next, tz, -1);
+  const gridEnd = dayStart(last, tz, 7 - tzParts(last, tz).wd);
+  return { first, next, gridStart, gridEnd };
+}
 
 export function rangeBounds(r: Range, now: Date, tz: string): [Date, Date] {
   const d0 = dayStart(now, tz);
@@ -50,10 +66,21 @@ export function rangeBounds(r: Range, now: Date, tz: string): [Date, Date] {
     case "next_14_days": return [d0, dayStart(now, tz, 14)];
     case "yesterday": return [dayStart(now, tz, -1), d0];
     case "past_week": return [dayStart(now, tz, -7), d0];
+    case "this_month": return [monthStart(now, tz), monthStart(now, tz, 1)];
+    case "next_month": return [monthStart(now, tz, 1), monthStart(now, tz, 2)];
+    case "day": return [d0, dayStart(now, tz, 1)];
   }
+}
+/** Bounds for one named day ("2026-10-27") in tz. */
+export function dayBounds(date: string, tz: string): [Date, Date] {
+  const noonUtc = new Date(`${date}T12:00:00Z`);
+  const probe = new Date(noonUtc.getTime() - offsetMs(noonUtc, tz));
+  return [dayStart(probe, tz), dayStart(probe, tz, 1)];
 }
 export function guessRange(task: string): Range {
   const t = task.toLowerCase();
+  if (/\bnext month\b/.test(t)) return "next_month";
+  if (/\b(this month|the month|my month|month view|monthly)\b|\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/.test(t)) return "this_month";
   if (/\byesterday\b/.test(t)) return "yesterday";
   if (/\b(last|past) week\b/.test(t)) return "past_week";
   if (/\btomorrow\b/.test(t)) return "tomorrow";
@@ -65,15 +92,23 @@ export function guessRange(task: string): Range {
 }
 
 /* ---------- the view rubric ---------- */
-export type Composition = { view: "agenda" | "event"; range: Range; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean }; by: "jev" | "fallback"; confidence?: number; variant?: string };
+export type Composition = { view: "agenda" | "event" | "month" | "free"; range: Range; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly: boolean }; by: "jev" | "fallback"; confidence?: number; variant?: string };
+
+export function guessView(task: string, range: Range): Composition["view"] {
+  if (/\b(free|available|availability|open slot|find (a )?time|when can|fit in|book a time)\b/i.test(task)) return "free";
+  if (range === "this_month" || range === "next_month" || /\bmonth\b/i.test(task)) return "month";
+  return "agenda";
+}
 
 export function viewRubric(task: string, sample: Event[], tz: string, now: Date) {
-  const guess: Composition = { view: "agenda", range: guessRange(task), fields: { attendees: /\b(who|guest|attendee|with)\b/i.test(task), location: /\b(where|room|location|office)\b/i.test(task), description: /\b(about|agenda|notes|detail)\b/i.test(task), past: /\b(all|everything|whole|yesterday|past|last)\b/i.test(task) }, by: "fallback" };
+  const gr = guessRange(task);
+  const guess: Composition = { view: guessView(task, gr), range: gr, fields: { attendees: /\b(who|guest|attendee|with)\b/i.test(task), location: /\b(where|room|location|office)\b/i.test(task), description: /\b(about|agenda|notes|detail)\b/i.test(task), past: /\b(all|everything|whole|yesterday|past|last|month)\b/i.test(task), invitesOnly: /\b(invite|invites|invitation|invitations|rsvp|respond|haven't answered|not answered|pending)\b/i.test(task) }, by: "fallback" };
   const state = { task, now: wall(now.toISOString(), tz), weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][tzParts(now, tz).wd], eventsNext14Days: sample.length, sample: sample.slice(0, 10).map((e) => ({ key: e.key, title: e.title, start: wall(e.start, tz), allDay: e.allDay, guests: e.attendees.length })) };
   const questions: Record<string, JevQuestion> = {
-    range: { type: "choice", instructions: "Which stretch of time does the task ask about? Judge the words. 'what's on', 'what do I have', 'my day', 'next meeting' -> today; 'tomorrow' -> tomorrow; 'this week', 'rest of the week' -> rest_of_week; 'next week' -> next_week; 'coming up', 'upcoming', 'my calendar' with no time word -> next_7_days; 'the next two weeks' -> next_14_days; 'yesterday' -> yesterday; 'last week', 'what did I have' -> past_week.",
-      criteria: { today: "The rest of today (or all of today when the task says so).", tomorrow: "Tomorrow only.", rest_of_week: "From today to the end of this week.", next_week: "Next Monday to Sunday.", next_7_days: "The coming seven days.", next_14_days: "The coming two weeks.", yesterday: "Yesterday only.", past_week: "The last seven days." } },
-    view: { type: "choice", instructions: "Pick the composition. One specific meeting ('my 3pm', 'the call with Seb', 'next meeting') -> event; a stretch of time -> agenda.", criteria: { agenda: "Events listed under day headers, like Google Calendar's schedule view.", event: "One event in full: time, guests, location, notes, Meet link, RSVP." } },
+    range: { type: "choice", instructions: "Which stretch of time does the task ask about? Judge the words. 'what's on', 'what do I have', 'my day', 'next meeting' -> today; 'tomorrow' -> tomorrow; 'this week', 'rest of the week' -> rest_of_week; 'next week' -> next_week; 'coming up', 'upcoming', 'my calendar' with no time word -> next_7_days; 'the next two weeks' -> next_14_days; 'yesterday' -> yesterday; 'last week', 'what did I have' -> past_week; 'this month', 'my month', 'October' -> this_month; 'next month' -> next_month.",
+      criteria: { today: "The rest of today (or all of today when the task says so).", tomorrow: "Tomorrow only.", rest_of_week: "From today to the end of this week.", next_week: "Next Monday to Sunday.", next_7_days: "The coming seven days.", next_14_days: "The coming two weeks.", yesterday: "Yesterday only.", past_week: "The last seven days.", this_month: "The whole current month.", next_month: "The whole next month." } },
+    view: { type: "choice", instructions: "Pick the composition. One specific meeting ('my 3pm', 'the call with Seb', 'next meeting') -> event; a stretch of time -> agenda; a whole month or 'month view' -> month; free time, availability, 'when am I free', 'find a time', 'fit in a 30 min call' -> free.", criteria: { agenda: "Events listed under day headers, like Google Calendar's schedule view.", event: "One event in full: time, guests, location, notes, Meet link, RSVP.", month: "Google Calendar's month grid: seven columns, one cell per day with its events.", free: "Find a time: each day's busy blocks and the open slots between them, to pick one." } },
+    invitesOnly: { type: "bool", instructions: "Show only invitations the person has not answered yet?", criteria: { true: "The task is about invites, RSVPs, things to respond to, or pending invitations.", false: "The task is about the schedule in general." } },
     past: { type: "bool", instructions: "Include events that have already ended today?", criteria: { true: "The task asks about the whole day, the past, or what happened.", false: "The task is about what is still ahead." } },
     attendees: { type: "bool", instructions: "Show the guest list on each event?", criteria: { true: "The task is about people: who, with whom, guests, attendees, RSVPs.", false: "Times and titles are enough." } },
     location: { type: "bool", instructions: "Show locations?", criteria: { true: "The task asks where, mentions rooms, offices, travel, or in-person meetings.", false: "Location does not matter." } },
@@ -81,7 +116,7 @@ export function viewRubric(task: string, sample: Event[], tz: string, now: Date)
   };
   const read = (answers: JevAnswers, variant: string): Composition | undefined => {
     if (answers.range?.type !== "choice") return undefined;
-    return { view: choiceOf(answers, "view", guess.view) as Composition["view"], range: answers.range.choice as Range, fields: { attendees: yesOf(answers, "attendees", guess.fields.attendees), location: yesOf(answers, "location", guess.fields.location), description: yesOf(answers, "description", guess.fields.description), past: yesOf(answers, "past", guess.fields.past) }, by: "jev", confidence: answers.range.confidence, variant };
+    return { view: choiceOf(answers, "view", guess.view) as Composition["view"], range: answers.range.choice as Range, fields: { attendees: yesOf(answers, "attendees", guess.fields.attendees), location: yesOf(answers, "location", guess.fields.location), description: yesOf(answers, "description", guess.fields.description), past: yesOf(answers, "past", guess.fields.past), invitesOnly: yesOf(answers, "invitesOnly", guess.fields.invitesOnly) }, by: "jev", confidence: answers.range.confidence, variant };
   };
   return { state, questions, read, guess };
 }

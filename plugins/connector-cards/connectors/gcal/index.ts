@@ -9,8 +9,8 @@
  * Reads and writes use Google Calendar v3 with Bonsai's Google sign-in (calendar scopes).
  */
 import { HttpError, defineConnector, classify, ms, type Run, type CardResult } from "../../runtime.ts";
-import { createEvent, deleteEvent, getEvent, listEvents, patchEvent, readMeta, rememberKeys, resolveKey, rsvp, type Calendar, type Event, type EventBody } from "./api.ts";
-import { RANGE_LABEL, createRubric, dayStart, rangeBounds, toGoogleTime, viewRubric, wall, type Composition, type Picks } from "./rubrics.ts";
+import { createEvent, deleteEvent, freeBusy, getEvent, listEvents, mergeAttendees, patchEvent, readMeta, rememberKeys, resolveKey, rsvp, type Busy, type Calendar, type Event, type EventBody } from "./api.ts";
+import { RANGE_LABEL, createRubric, dayBounds, dayStart, monthGrid, rangeBounds, toGoogleTime, tzParts, viewRubric, wall, type Composition, type Picks, type Range } from "./rubrics.ts";
 import { parseCardMessage, type EventChange, type EventCreate } from "./write.ts";
 
 const KEY = /#[0-9a-f]{6}\b/i;
@@ -31,6 +31,32 @@ const addMinutesWall = (start: string, minutes: number): string => {
   return `${base.toISOString().slice(0, 10)} ${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 };
 
+/** Working hours the free-time finder looks inside, as wall-clock hours in the calendar's zone. */
+const WORKDAY = { start: 9, end: 18 };
+
+/** Each day's busy blocks and the open slots between them, within working hours, from now on. */
+function freeSlots(busy: Busy[], events: Event[], from: Date, to: Date, now: Date, tz: string, slotMin: number) {
+  const days: { date: string; weekday: string; busy: { start: string; end: string; title?: string }[]; free: { start: string; end: string }[] }[] = [];
+  const merged = busy.map((b) => ({ s: new Date(b.start).getTime(), e: new Date(b.end).getTime() })).sort((a, b) => a.s - b.s).reduce<{ s: number; e: number }[]>((acc, b) => { const last = acc[acc.length - 1]; if (last && b.s <= last.e) last.e = Math.max(last.e, b.e); else acc.push({ ...b }); return acc; }, []);
+  for (let d = dayStart(from, tz); d < to; d = dayStart(d, tz, 1)) {
+    const wd = tzParts(d, tz).wd;
+    if (wd === 0 || wd === 6) continue;
+    const dayS = Math.max(d.getTime() + WORKDAY.start * 3600e3, now.getTime());
+    const dayE = d.getTime() + WORKDAY.end * 3600e3;
+    if (dayE <= dayS) continue;
+    const todays = merged.filter((b) => b.e > dayS && b.s < dayE);
+    const free: { start: string; end: string }[] = [];
+    let cursor = Math.ceil(dayS / (15 * 60e3)) * 15 * 60e3;
+    for (const b of [...todays, { s: dayE, e: dayE }]) {
+      if (b.s - cursor >= slotMin * 60e3) free.push({ start: wall(new Date(cursor).toISOString(), tz), end: wall(new Date(b.s).toISOString(), tz) });
+      cursor = Math.max(cursor, b.e);
+    }
+    const titleFor = (b: { s: number; e: number }) => events.find((ev) => !ev.allDay && new Date(ev.start).getTime() < b.e && new Date(ev.end).getTime() > b.s)?.title;
+    days.push({ date: wall(d.toISOString(), tz).slice(0, 10), weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wd], busy: todays.map((b) => ({ start: wall(new Date(Math.max(b.s, dayS)).toISOString(), tz), end: wall(new Date(Math.min(b.e, dayE)).toISOString(), tz), ...(titleFor(b) ? { title: titleFor(b) } : {}) })), free });
+  }
+  return days;
+}
+
 const calendarFor = (calendars: Calendar[], idOrName: string | undefined) => calendars.find((c) => c.id === idOrName) ?? calendars.find((c) => c.name.toLowerCase() === (idOrName ?? "").toLowerCase()) ?? calendars.find((c) => c.primary && c.writable) ?? calendars.find((c) => c.writable) ?? calendars[0];
 
 async function eventByRef(token: string, cache: Run["cache"], calendars: Calendar[], ref: string, signal?: AbortSignal): Promise<Event | undefined> {
@@ -50,17 +76,17 @@ export const gcal = defineConnector({
   aliases: ["calendar", "google calendar", "gcal", "cal"],
   auth: { serviceId: "google.account", schemeId: "google.oauth", requiredScopes: ["https://www.googleapis.com/auth/calendar.events"], connectServiceId: "gcal" },
   triggers: {
-    keywords: ["calendar", "meeting", "meetings", "event", "events", "schedule", "invite", "invites", "agenda", "appointment", "call with", "tomorrow", "this week", "next week", "free", "busy", "rsvp", "what's on", "whats on", "my day", "booked"],
+    keywords: ["calendar", "meeting", "meetings", "event", "events", "schedule", "invite", "invites", "invitation", "invitations", "agenda", "appointment", "call with", "tomorrow", "this week", "next week", "this month", "next month", "month", "free", "busy", "availability", "available", "find a time", "rsvp", "what's on", "whats on", "my day", "booked"],
     refPattern: KEY,
     messagePattern: /^(Save event|Create event|RSVP|Delete event)\b/,
   },
   examples: {
-    view: ["what's on today", "my week", "what do I have tomorrow", "when am I free this week", "who am I meeting next week"],
+    view: ["what's on today", "my week", "what do I have tomorrow", "show me this month", "when am I free this week", "find 30 min for a call next week", "invites I haven't answered", "who am I meeting next week"],
     record: ["show my 3pm", "the call with Seb", "show #a1b2c3"],
     draft: ["schedule a call with Seb tomorrow at 3pm", "block Friday afternoon for focus", "set up a 30 min sync with alex@… on Monday"],
     apply: ["Save event #a1b2c3: start → 2026-10-24 15:00; end → 2026-10-24 15:30", "Create event: <title>\\n<properties line>", "RSVP #a1b2c3: yes", "Delete event #a1b2c3"],
   },
-  filters: { calendar: "a calendar's name, to look at one calendar only" },
+  filters: { calendar: "a calendar's name, to look at one calendar only", date: "one day, YYYY-MM-DD, when the ask names a specific date" },
   explain: (err) => (err instanceof HttpError ? (err.status === 401 ? "Google rejected Bonsai's sign-in (HTTP 401). Reconnect Google in App Store → Installed → Google Calendar → Connections." : err.status === 403 ? "Google refused (HTTP 403): the connected Google account has not granted calendar access to Bonsai. Reconnect Google Calendar in App Store → Installed." : undefined) : undefined),
 
   async view({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -69,29 +95,57 @@ export const gcal = defineConnector({
     const now = new Date();
     const only = params.filters?.calendar ? meta.calendars.filter((c) => c.name.toLowerCase() === String(params.filters.calendar).toLowerCase()) : meta.calendars;
     const calendars = only.length ? only : meta.calendars;
-    const pastWanted = /\b(yesterday|last week|past week|what did i)\b/i.test(params.task ?? "");
+    const task: string = params.task ?? "";
+    const pastWanted = /\b(yesterday|last week|past week|what did i)\b/i.test(task);
     const refs: string[] = (params.refs ?? []).filter((r: string) => KEY.test(r));
+    const date: string | undefined = typeof params.filters?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(params.filters.date) ? params.filters.date : undefined;
+    // The fetch window is decided before Jev answers: a month ask needs the month's 6-week grid, anything else ±2 weeks.
+    const guessRange = viewRubric(task, [], tz, now).guess.range;
+    const monthAhead = guessRange === "next_month" ? 1 : 0;
+    const grid = monthGrid(now, tz, monthAhead);
+    const wantsMonth = guessRange === "this_month" || guessRange === "next_month";
+    let window: [Date, Date] = date ? dayBounds(date, tz) : wantsMonth ? [grid.gridStart, grid.gridEnd] : [dayStart(now, tz, pastWanted ? -7 : 0), dayStart(now, tz, 14)];
     let all: Event[];
     if (refs.length) all = (await Promise.all(refs.map((r) => eventByRef(token, cache, calendars, r, signal)))).filter(Boolean) as Event[];
-    else all = await listEvents(token, cache, calendars, dayStart(now, tz, pastWanted ? -7 : 0), dayStart(now, tz, 14), params.query, signal);
+    else all = await listEvents(token, cache, calendars, window[0], window[1], params.query, signal);
     const tGoogle = ms(startedAt);
-    const rubric = viewRubric(params.task ?? "", all, tz, now);
+    const rubric = viewRubric(task, all, tz, now);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
     const { value, took: tJev } = await jev({ purpose: "gcal-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess);
     const comp = value as Composition;
+    if (date) comp.range = "day";
+    // Jev chose a month the heuristic did not fetch for: fetch the grid now (rare, one more round trip).
+    const isMonth = comp.range === "this_month" || comp.range === "next_month";
+    const g = isMonth ? monthGrid(now, tz, comp.range === "next_month" ? 1 : 0) : grid;
+    if (isMonth && !refs.length && (g.gridStart < window[0] || g.gridEnd > window[1])) { all = await listEvents(token, cache, calendars, g.gridStart, g.gridEnd, params.query, signal); window = [g.gridStart, g.gridEnd]; }
+    if (isMonth && comp.view !== "free") comp.view = "month";
+    const [from, to] = date ? dayBounds(date, tz) : isMonth ? [g.gridStart, g.gridEnd] : rangeBounds(comp.range, now, tz);
     let events = all;
     if (!refs.length) {
-      const [from, to] = rangeBounds(comp.range, now, tz);
-      events = all.filter((e) => { const s = new Date(e.start), en = new Date(e.end ?? e.start); return s < to && en > from && (comp.fields.past || comp.range !== "today" || en >= now); });
+      events = all.filter((e) => { const s = new Date(e.start), en = new Date(e.end ?? e.start); return s < to && en > from && (comp.fields.past || isMonth || comp.range !== "today" || en >= now); });
       if (!events.length && comp.range === "today" && !comp.fields.past) { const todays = all.filter((e) => { const s = new Date(e.start); return s >= from && s < to; }); if (todays.length) { events = todays; comp.fields.past = true; } }
     }
+    if (comp.fields.invitesOnly) events = events.filter((e) => e.myResponse === "needsAction");
     if (events.length === 1 && (comp.view === "event" || refs.length)) comp.view = "event";
     if (events.length !== 1 && comp.view === "event") comp.view = "agenda";
     const who = comp.by === "jev" ? `Jev picked, ${comp.variant} questions answered` : "default pick, Jev unavailable";
-    const payload = { kind: "view", task: params.task, timeZone: tz, now: wall(now.toISOString(), tz), calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), events, composition: comp, timing: { google: tGoogle, jev: tJev } };
-    const picked = `${comp.view}, range ${comp.range}${comp.fields.attendees ? ", with guests" : ""}${comp.fields.location ? ", with locations" : ""}`;
-    if (!events.length) return { summary: `No events ${RANGE_LABEL[comp.range].toLowerCase()}. Say so in one line.`, payload, picked };
-    return { summary: `Showing ${events.length} event${events.length === 1 ? "" : "s"} (${RANGE_LABEL[comp.range]}) as ${comp.view === "event" ? "an event card" : "an agenda"} (${who}; Google ${tGoogle}, Jev ${tJev}). The card is the answer: reply with one short line or nothing. Never restate its fields.`, payload, picked };
+    const rangeLabel = date ? `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][tzParts(from, tz).wd]} ${date}` : RANGE_LABEL[comp.range];
+    const cals = meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary }));
+    let extra: Record<string, unknown> = {};
+    if (comp.view === "free") {
+      // Availability: Google's freeBusy over the range, then the open slots between busy blocks in working hours.
+      const [ff, ft] = isMonth ? [now, g.next] : [new Date(Math.max(from.getTime(), now.getTime())), to.getTime() > now.getTime() ? to : dayStart(now, tz, 7)];
+      const busyMap = await freeBusy(token, calendars.map((c) => c.id), ff, ft, signal);
+      const busy = Object.values(busyMap).flat();
+      const slotMin = Number(task.match(/\b(\d{2,3})\s*(?:min|minutes)\b/i)?.[1] ?? (/\b(an? hour|1 ?h|60 ?min)\b/i.test(task) ? 60 : 30));
+      extra = { free: { days: freeSlots(busy, all, ff, ft, now, tz, slotMin), slotMinutes: slotMin, workday: WORKDAY, from: wall(ff.toISOString(), tz), to: wall(ft.toISOString(), tz) } };
+    }
+    if (comp.view === "month") extra = { ...extra, month: { label: new Date(g.first.getTime() + 36e5 * 12).toLocaleDateString("en-US", { timeZone: tz, month: "long", year: "numeric" }), gridStart: wall(g.gridStart.toISOString(), tz).slice(0, 10), gridEnd: wall(g.gridEnd.toISOString(), tz).slice(0, 10), first: wall(g.first.toISOString(), tz).slice(0, 10), next: wall(g.next.toISOString(), tz).slice(0, 10) } };
+    const payload = { kind: "view", task, timeZone: tz, now: wall(now.toISOString(), tz), rangeLabel, calendars: cals, events, composition: comp, ...extra, timing: { google: tGoogle, jev: tJev } };
+    const picked = `${comp.view}, range ${comp.range}${comp.fields.attendees ? ", with guests" : ""}${comp.fields.location ? ", with locations" : ""}${comp.fields.invitesOnly ? ", invites only" : ""}`;
+    const viewName = comp.view === "event" ? "an event card" : comp.view === "month" ? "a month grid" : comp.view === "free" ? "a find-a-time view" : "an agenda";
+    if (!events.length && comp.view !== "free") return { summary: `No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${rangeLabel.toLowerCase()}. Say so in one line.`, payload, picked };
+    return { summary: `Showing ${comp.view === "free" ? `free time (${rangeLabel})` : `${events.length} event${events.length === 1 ? "" : "s"} (${rangeLabel})`} as ${viewName} (${who}; Google ${tGoogle}, Jev ${tJev}). The card is the answer: reply with one short line or nothing. Never restate its fields.`, payload, picked };
   },
 
   async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
@@ -148,7 +202,7 @@ export const gcal = defineConnector({
       if (c.location !== undefined) body.location = c.location ?? "";
       if (c.start !== undefined) body.start = toGoogleTime(c.start, tz, current.allDay);
       if (c.end !== undefined) body.end = toGoogleTime(c.end, tz, current.allDay);
-      if (c.guests !== undefined) body.attendees = c.guests.map((email) => ({ email }));
+      if (c.guests !== undefined) body.attendees = mergeAttendees(current.attendees, c.guests);
       if (c.meet === true && !current.meet) (body as any).conferenceData = { createRequest: { requestId: `cc-${Date.now()}`, conferenceSolutionKey: { type: "hangoutsMeet" } } };
       const ev = await patchEvent(token, cal, id, body, signal);
       fresh.push(ev);
@@ -170,7 +224,7 @@ export const gcal = defineConnector({
     if (del) { const { cal, id } = await locate(del); const ev = await getEvent(token, cal, id, signal).catch(() => undefined); await deleteEvent(token, cal, id, signal); applied.push(`${ev?.title ?? del}: deleted`); }
     await rememberKeys(cache, fresh);
     const tWrite = ms(startedAt);
-    const comp: Composition = { view: fresh.length === 1 ? "event" : "agenda", range: "next_14_days", fields: { attendees: true, location: true, description: fresh.length === 1, past: true }, by: "fallback" };
+    const comp: Composition = { view: fresh.length === 1 ? "event" : "agenda", range: "next_14_days", fields: { attendees: true, location: true, description: fresh.length === 1, past: true, invitesOnly: false }, by: "fallback" };
     return {
       summary: `Saved to Google Calendar: ${applied.join("; ")} (Google ${tWrite}). ${fresh.length ? "The card shows the updated event; " : ""}reply with one short line or nothing.`,
       payload: fresh.length === 1 ? { kind: "event", timeZone: tz, event: fresh[0], calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), applied, timing: { google: tWrite } } : { kind: "view", task: "Saved", timeZone: tz, now: wall(new Date().toISOString(), tz), calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), events: fresh, composition: comp, applied, timing: { google: tWrite } },

@@ -424,7 +424,7 @@ var linearUi = { id: "linear", label: "Linear", component: LinearUi, runningText
 // connectors/gcal/ui.tsx
 import { useEffect as useEffect3, useMemo as useMemo2, useRef as useRef3, useState as useState3 } from "react";
 var TIMING2 = { google: "Google", jev: "Jev" };
-var RANGE_LABEL = { today: "Today", tomorrow: "Tomorrow", rest_of_week: "This week", next_week: "Next week", next_7_days: "Next 7 days", next_14_days: "Next 14 days", yesterday: "Yesterday", past_week: "Past week" };
+var RANGE_LABEL = { today: "Today", tomorrow: "Tomorrow", rest_of_week: "This week", next_week: "Next week", next_7_days: "Next 7 days", next_14_days: "Next 14 days", yesterday: "Yesterday", past_week: "Past week", this_month: "This month", next_month: "Next month", day: "Day" };
 var DEFAULT_COLOR = "#039be5";
 function wallOf(iso, tz) {
   if (!iso) return "";
@@ -547,12 +547,123 @@ function EventCard({ ctx, event: given, note }) {
   }} onSave={save} note={note ?? (ctx.details?.timing?.google ? `Google ${ctx.details.timing.google}` : void 0)} />
     </section>;
 }
+var addDays = (ymd, n) => {
+  const d = /* @__PURE__ */ new Date(`${ymd}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+function MonthGrid({ ctx, caption }) {
+  const d = ctx.details ?? {};
+  const tz = d.timeZone ?? "UTC";
+  const m = d.month ?? {};
+  const events = Array.isArray(d.events) ? d.events : [];
+  const today = (d.now ?? wallOf((/* @__PURE__ */ new Date()).toISOString(), tz)).slice(0, 10);
+  const byDay = /* @__PURE__ */ new Map();
+  for (const e of events) {
+    const s = wallOf(e.start, tz).slice(0, 10);
+    const endExclusive = e.allDay ? e.end : wallOf(e.end, tz).slice(0, 10);
+    for (let day = s; day < (e.allDay ? endExclusive : addDays(endExclusive, 1)) && day <= addDays(s, 31); day = addDays(day, 1)) byDay.set(day, [...byDay.get(day) ?? [], e]);
+  }
+  const cells = [];
+  for (let day = m.gridStart; day && day < m.gridEnd && cells.length < 42; day = addDays(day, 1)) cells.push(day);
+  const inMonth = (day) => day >= m.first && day < m.next;
+  const cell = { minHeight: 64, padding: "4px 4px 6px", borderTop: `1px solid ${v("border")}`, borderLeft: `1px solid ${v("border")}`, display: "flex", flexDirection: "column", gap: 2, minWidth: 0 };
+  return <section style={{ ...card, maxWidth: 760 }}>
+      <div style={{ ...pad, gap: 6, paddingBottom: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 15, fontWeight: 600 }}>{m.label ?? "Month"} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+            <Button variant="secondary" size="sm" onClick={() => {
+    void ctx.send(`Show me ${m.label === d.now?.slice(0, 7) ? "last" : "the previous"} month on my calendar`);
+  }} aria-label="Previous month">‹</Button>
+            <Button variant="secondary" size="sm" onClick={() => {
+    void ctx.send("Show me next month on my calendar");
+  }} aria-label="Next month">›</Button>
+          </span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", fontSize: 10, fontWeight: 600, letterSpacing: 0.5, ...muted, textAlign: "center" }}>{["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((w) => <div key={w} style={{ padding: "2px 0 4px" }}>{w}</div>)}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderRight: `1px solid ${v("border")}`, borderBottom: `1px solid ${v("border")}`, margin: "0 20px 16px" }}>
+        {cells.map((day) => {
+    const items = byDay.get(day) ?? [];
+    const shown = items.slice(0, 3);
+    return <div key={day} style={{ ...cell, opacity: inMonth(day) ? 1 : 0.45 }}>
+              <button
+      type="button"
+      onClick={() => {
+        void ctx.send(`What's on my calendar on ${day}?`);
+      }}
+      title={`Open ${day}`}
+      style={{ ...bare, width: 24, height: 24, borderRadius: 12, alignSelf: "flex-start", fontSize: 12, fontWeight: day === today ? 700 : 500, background: day === today ? v("accent") : "transparent", color: day === today ? "white" : v("text-primary"), cursor: "pointer", textAlign: "center" }}
+    >{Number(day.slice(8, 10))}</button>
+              {shown.map((e) => <button
+      key={e.key}
+      type="button"
+      onClick={() => {
+        void ctx.send(`Show event ${e.key}`);
+      }}
+      title={`${e.title} \xB7 ${timeRange(e, tz)}`}
+      {...hoverable}
+      style={{ ...bare, display: "flex", alignItems: "center", gap: 4, padding: "1px 4px", borderRadius: 4, fontSize: 11, lineHeight: "16px", cursor: "pointer", textAlign: "left", ...e.allDay ? { background: e.color ?? DEFAULT_COLOR, color: "white" } : {}, ...e.myResponse === "declined" ? { textDecoration: "line-through", ...muted } : {} }}
+    >
+                  {!e.allDay ? <span style={{ width: 6, height: 6, borderRadius: 3, background: e.color ?? DEFAULT_COLOR, flexShrink: 0 }} /> : null}
+                  {!e.allDay ? <span style={{ ...muted, flexShrink: 0 }}>{fmtTime(wallOf(e.start, tz)).replace(":00", "").replace(" ", "").toLowerCase()}</span> : null}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
+                </button>)}
+              {items.length > 3 ? <button type="button" onClick={() => {
+      void ctx.send(`What's on my calendar on ${day}?`);
+    }} style={{ ...bare, width: "auto", fontSize: 11, ...muted, cursor: "pointer", padding: "0 4px", textAlign: "left" }}>+{items.length - 3} more</button> : null}
+            </div>;
+  })}
+      </div>
+    </section>;
+}
+function FreeTime({ ctx, caption }) {
+  const d = ctx.details ?? {};
+  const f = d.free ?? {};
+  const days = Array.isArray(f.days) ? f.days : [];
+  const wd = f.workday ?? { start: 9, end: 18 };
+  const span = (wd.end - wd.start) * 60;
+  const pct = (w) => {
+    const [h, m] = (w.split(" ")[1] ?? "00:00").split(":").map(Number);
+    return Math.max(0, Math.min(100, (h * 60 + m - wd.start * 60) / span * 100));
+  };
+  const suggestions = days.flatMap((day) => day.free.slice(0, 2).map((s) => ({ day, s }))).slice(0, 6);
+  const draft = (day, start) => {
+    void ctx.send(`Draft an event on ${day.date} at ${start.split(" ")[1]} for ${f.slotMinutes ?? 30} minutes`);
+  };
+  if (!days.length) return <ErrorCard message="No working days in that range." />;
+  return <section style={card}>
+      <div style={{ ...pad, gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Find a time <span style={{ ...muted, fontWeight: 400 }}>{f.slotMinutes ?? 30} min · {wd.start}:00–{wd.end}:00</span></span>
+          <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+        </div>
+        {days.map((day) => <div key={day.date} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 54, flexShrink: 0, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{day.weekday}</span> <span style={muted}>{fmtDay(day.date).split(", ")[1]}</span></div>
+            <div style={{ position: "relative", flex: 1, height: 22, borderRadius: 6, background: v("bg-subtle"), overflow: "hidden" }}>
+              {day.free.map((s) => <button key={s.start} type="button" onClick={() => draft(day, s.start)} title={`Free ${fmtTime(s.start)} \u2013 ${fmtTime(s.end)} \xB7 click to draft an event`} style={{ ...bare, position: "absolute", top: 0, bottom: 0, left: `${pct(s.start)}%`, width: `${Math.max(1, pct(s.end) - pct(s.start))}%`, background: "color-mix(in srgb, var(--kay-color-success) 28%, transparent)", cursor: "pointer", fontSize: 10, color: v("text-primary"), overflow: "hidden", whiteSpace: "nowrap", textAlign: "left", paddingLeft: 4 }}>{fmtTime(s.start)}</button>)}
+              {day.busy.map((b, i) => <div key={i} title={`${b.title ?? "Busy"} \xB7 ${fmtTime(b.start)} \u2013 ${fmtTime(b.end)}`} style={{ position: "absolute", top: 3, bottom: 3, left: `${pct(b.start)}%`, width: `${Math.max(0.8, pct(b.end) - pct(b.start))}%`, borderRadius: 4, background: DEFAULT_COLOR, opacity: 0.85 }} />)}
+            </div>
+          </div>)}
+        {suggestions.length ? <div style={{ ...row, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
+            <span style={{ ...muted, fontSize: 12 }}>Suggested</span>
+            {suggestions.map(({ day, s }) => <Button key={`${day.date}${s.start}`} variant="secondary" size="sm" onClick={() => draft(day, s.start)}>{day.weekday} {fmtTime(s.start)}</Button>)}
+          </div> : <div style={{ ...muted, fontSize: 12 }}>No open slot of {f.slotMinutes ?? 30} minutes in working hours.</div>}
+      </div>
+    </section>;
+}
 function Agenda({ ctx, note }) {
   const d = ctx.details ?? {};
   const tz = d.timeZone ?? "UTC";
   const events = Array.isArray(d.events) ? d.events : [];
   const comp = d.composition ?? { view: "agenda", range: "next_7_days", fields: { attendees: false, location: false, description: false, past: false }, by: "fallback" };
-  if (!events.length) return <ErrorCard message={`No events ${(RANGE_LABEL[comp.range] ?? "").toLowerCase()}.`} />;
+  const t0 = d.timing;
+  const caption0 = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t0?.google ? ` \xB7 Google ${t0.google}` : ""}${t0?.jev ? ` \xB7 Jev ${t0.jev}` : ""}`);
+  if (comp.view === "free") return <FreeTime ctx={ctx} caption={caption0} />;
+  if (comp.view === "month" && d.month) return <MonthGrid ctx={ctx} caption={caption0} />;
+  if (!events.length) return <ErrorCard message={`No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${(d.rangeLabel ?? RANGE_LABEL[comp.range] ?? "").toLowerCase()}.`} />;
   if (comp.view === "event" && events.length === 1) return <EventCard ctx={ctx} event={events[0]} note={note} />;
   const today = (d.now ?? wallOf((/* @__PURE__ */ new Date()).toISOString(), tz)).slice(0, 10);
   const days = /* @__PURE__ */ new Map();
@@ -561,11 +672,11 @@ function Agenda({ ctx, note }) {
     days.set(k, [...days.get(k) ?? [], e]);
   }
   const t = d.timing;
-  const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : `${RANGE_LABEL[comp.range] ?? "Agenda"} \xB7 ${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.google ? ` \xB7 Google ${t.google}` : ""}${t?.jev ? ` \xB7 Jev ${t.jev}` : ""}`);
+  const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.google ? ` \xB7 Google ${t.google}` : ""}${t?.jev ? ` \xB7 Jev ${t.jev}` : ""}`);
   return <section style={card}>
       <div style={{ ...pad, gap: 4 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{RANGE_LABEL[comp.range] ?? "Agenda"} <span style={{ ...muted, fontWeight: 400 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{comp.fields.invitesOnly ? "Invitations" : d.rangeLabel ?? RANGE_LABEL[comp.range] ?? "Agenda"} <span style={{ ...muted, fontWeight: 400 }}>{events.length} {events.length === 1 ? "event" : "events"}</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
         {[...days.entries()].map(([day, items]) => <div key={day} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${v("border")}` }}>

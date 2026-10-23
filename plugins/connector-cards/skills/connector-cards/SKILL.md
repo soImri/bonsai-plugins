@@ -9,12 +9,12 @@ Four tools, any connector. One call draws the card: the plugin picks the connect
 
 | The ask | The one call |
 | --- | --- |
-| About several records: "what's open", "my issues", "where do we stand", "how is Evals v1 going", "what's on today", "my week", "who am I meeting tomorrow" | `cards_view { task: <their words>, refs?: [ids named], query?: <topic word>, filters?: {…} }` |
+| About several records: "what's open", "my issues", "where do we stand", "how is Evals v1 going", "what's on today", "my week", "show me this month", "when am I free next week", "find 30 min for a call", "invites I haven't answered", "who am I meeting tomorrow" | `cards_view { task: <their words>, refs?: [ids named], query?: <topic word>, filters?: {…} }` |
 | About one record: "show NEAT-9", "status of NEAT-9", "comment on NEAT-9 that …", "show my 3pm", "the call with Seb" | `cards_record { ref: "NEAT-9" \| "#a1b2c3" \| "<title>", draft?: <comment text> }` |
 | Make a new one: "create a ticket for …", "file a bug …", "schedule a call with Seb tomorrow at 3", "block Friday afternoon" | `cards_draft { task: <their words>, title: <≤ 80 chars>, body?: <≤ 3 lines>, fields?: {…} }` |
 | A message a card sent (see below) | `cards_apply { message: <the whole message, verbatim> }` |
 
-Pass `connector` ("linear", "gcal") only when the ask is ambiguous. For a calendar draft, put what the ask states into `fields`: `start` and `end` as the person's local date-time (`2026-10-24T15:00`), `attendees` as emails, `location`, `allDay`. Leave out what the ask does not say; Jev and the card fill the rest.
+Pass `connector` ("linear", "gcal") only when the ask is ambiguous. A calendar ask about one specific date goes in `filters: { date: "YYYY-MM-DD" }`. A free-time slot click sends `Draft an event on <date> at <time> for <N> minutes`: answer it with `cards_draft { task, title: "New event", fields: { start, end } }`. For a calendar draft, put what the ask states into `fields`: `start` and `end` as the person's local date-time (`2026-10-24T15:00`), `attendees` as emails, `location`, `allDay`. Leave out what the ask does not say; Jev and the card fill the rest.
 
 After the call returns, reply with at most one short line, or nothing. Never restate the card's fields. Never rebuild a card as prose or a generic form.
 

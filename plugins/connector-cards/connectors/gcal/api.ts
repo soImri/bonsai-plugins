@@ -79,6 +79,15 @@ export async function getEvent(token: string, cal: Calendar, eventId: string, si
   return normalizeEvent(await gapi(token, "GET", `/calendars/${encodeURIComponent(cal.id)}/events/${encodeURIComponent(eventId)}`, undefined, signal), cal);
 }
 
+/* ---------- availability (Google's freeBusy, the same call gcal://availability makes) ---------- */
+export type Busy = { start: string; end: string };
+export async function freeBusy(token: string, calendarIds: string[], from: Date, to: Date, signal?: AbortSignal): Promise<Record<string, Busy[]>> {
+  const r = await gapi(token, "POST", "/freeBusy", { timeMin: from.toISOString(), timeMax: to.toISOString(), items: calendarIds.map((id) => ({ id })) }, signal);
+  const out: Record<string, Busy[]> = {};
+  for (const [id, cal] of Object.entries<any>(r.calendars ?? {})) out[id] = (cal.busy ?? []).map((b: any) => ({ start: b.start, end: b.end }));
+  return out;
+}
+
 /* ---------- keys ---------- */
 type KeyMap = Record<string, { calendar: string; id: string }>;
 /** Every event a card can name must be remembered here, listed, fetched or just created alike. */
@@ -95,13 +104,23 @@ export async function resolveKey(cache: DiskCache, key: string): Promise<{ calen
 }
 
 /* ---------- writes ---------- */
-export type EventBody = { summary?: string; description?: string; location?: string; start?: { dateTime?: string; date?: string; timeZone?: string }; end?: { dateTime?: string; date?: string; timeZone?: string }; attendees?: { email: string }[]; conferenceData?: unknown };
+export type EventBody = { summary?: string; description?: string; location?: string; start?: { dateTime?: string; date?: string; timeZone?: string }; end?: { dateTime?: string; date?: string; timeZone?: string }; attendees?: { email: string; responseStatus?: string; optional?: boolean }[]; conferenceData?: unknown };
 
 export async function createEvent(token: string, cal: Calendar, body: EventBody, meet: boolean, signal?: AbortSignal): Promise<Event> {
   const b: any = { ...body };
   if (meet) b.conferenceData = { createRequest: { requestId: `cc-${Date.now()}`, conferenceSolutionKey: { type: "hangoutsMeet" } } };
   const r = await gapi(token, "POST", `/calendars/${encodeURIComponent(cal.id)}/events?conferenceDataVersion=1&sendUpdates=${body.attendees?.length ? "all" : "none"}`, b, signal);
   return normalizeEvent(r, cal);
+}
+/**
+ * Google's events.patch resets the RSVP of every attendee sent without a `responseStatus`, so a
+ * guest-list edit must echo the existing guests with their current answers and add only the new ones.
+ */
+export function mergeAttendees(current: Attendee[], emails: string[]): { email: string; responseStatus?: string; optional?: boolean }[] {
+  const keep = new Set(emails.map((e) => e.toLowerCase()));
+  const existing = current.filter((a) => keep.has(a.email.toLowerCase())).map((a) => ({ email: a.email, responseStatus: a.response, ...(a.optional ? { optional: true } : {}) }));
+  const have = new Set(existing.map((a) => a.email.toLowerCase()));
+  return [...existing, ...emails.filter((e) => !have.has(e.toLowerCase())).map((email) => ({ email }))];
 }
 export async function patchEvent(token: string, cal: Calendar, eventId: string, body: EventBody, signal?: AbortSignal): Promise<Event> {
   const r = await gapi(token, "PATCH", `/calendars/${encodeURIComponent(cal.id)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`, body, signal);
