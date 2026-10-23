@@ -69,18 +69,14 @@ function diff(a: Props, b: Props): string[] {
   if (a.labels.join("|") !== b.labels.join("|")) out.push(`labels → ${b.labels.length ? b.labels.join(", ") : "none"}`);
   return out;
 }
-/** The same diff as a change object for `linearcards_apply` (null clears a field). */
-function changeOf(identifier: string, a: Props, b: Props) {
-  const c: Record<string, unknown> = { identifier };
-  if (a.state?.name !== b.state?.name) c.state = b.state?.name;
-  if (a.priority !== b.priority) c.priority = b.priority;
-  if (a.assignee !== b.assignee) c.assignee = b.assignee ?? null;
-  if (a.project !== b.project) c.project = b.project ?? null;
-  if (a.labels.join("|") !== b.labels.join("|")) c.labels = b.labels;
-  return c;
-}
-/** The message a card sends: one human line, then the exact JSON the agent hands to linearcards_apply. */
-const applyMessage = (human: string, payload: unknown) => `Apply in Linear: ${human}\n\nCall linearcards_apply with exactly:\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``;
+/**
+ * What a card sends is a short command in plain words; the plugin parses it (linear/write.ts
+ * `parseCardMessage`), the agent only passes it on. Keep these three shapes and the parser in step.
+ */
+const saveLine = (identifier: string, changes: string[]) => `Save ${identifier}: ${changes.join("; ")}`;
+const commentMessage = (identifier: string, body: string) => `Comment on ${identifier}:\n${body}`;
+const createMessage = (team: string, title: string, p: Props, description: string) =>
+  `Create in ${team}: ${title}\nstatus → ${p.state?.name ?? "none"}; priority → ${PRIORITIES[p.priority]}; assignee → ${p.assignee ?? "none"}; project → ${p.project ?? "none"}; labels → ${p.labels.length ? p.labels.join(", ") : "none"}${description.trim() ? `\n\nDescription:\n${description.trim()}` : ""}`;
 
 /* ---------- glyphs ---------- */
 function StatusGlyph({ type }: { type?: string }) {
@@ -195,8 +191,7 @@ function CommentComposer({ identifier, draft, sessionId }: { identifier: string;
   useEffect(() => { if (draft) { setText(draft); setOpen(true); } }, [draft]);
   async function post() {
     setPosting(true);
-    const body = text.trim();
-    await actions.sendMessage(applyMessage(`comment on ${identifier}`, { comment: { identifier, body } }));
+    await actions.sendMessage(commentMessage(identifier, text.trim()));
     setPosting(false); setText(""); setOpen(false);
   }
   if (!open) return <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button>;
@@ -238,7 +233,7 @@ function IssueCard({ call, phase, rawArgs, rawResult, sessionId, note }: Rendere
   if (details?.error) return <ErrorCard message={details.error} />;
   if (!issue?.title || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Reading Linear…" : "No issue data."}</div>;
   const changes = diff(saved, cur); dirty.current = changes.length > 0;
-  async function save() { setSaving(true); const next = cur; await actions.sendMessage(applyMessage(`${issue!.identifier}: ${changes.join("; ")}`, { changes: [changeOf(issue!.identifier, saved, cur)] })); setSaved(next); setSaving(false); }
+  async function save() { setSaving(true); const next = cur; await actions.sendMessage(saveLine(issue!.identifier, changes)); setSaved(next); setSaving(false); }
   return (
     <section style={card}>
       <div style={pad}>
@@ -278,10 +273,8 @@ function NewIssueCard({ call, phase, rawArgs, rawResult, sessionId }: RendererPr
   if (details?.error) return <ErrorCard message={details.error} />;
   if (!draft?.team || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Reading Linear…" : "No draft data."}</div>;
   async function create() {
-    const final = { team: draft!.team, title: title.trim(), description: desc.trim(), state: props.state?.name, priority: props.priority, assignee: props.assignee, project: props.project, labels: props.labels };
-    const summary = [props.state?.name, PRIORITIES[props.priority], props.assignee, props.project, props.labels.length ? props.labels.join(", ") : null].filter(Boolean).join(" · ");
     setSent(true);
-    await actions.sendMessage(applyMessage(`create "${final.title}" in ${draft!.team} (${summary})`, { create: final }));
+    await actions.sendMessage(createMessage(draft!.team, title.trim(), props, desc));
   }
   return (
     <section style={card}>
@@ -371,9 +364,9 @@ function ComposedView({ call, phase, rawArgs, rawResult, sessionId, runningText 
   }
 
   const changedIds = issues.filter(i => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map(i => i.identifier);
-  const changes = changedIds.map(id => `${id}: ${diff(saved[id], cur[id]).join("; ")}`);
+  const changes = changedIds.map(id => saveLine(id, diff(saved[id], cur[id])));
   dirty.current = changes.length > 0;
-  async function save() { setSaving(true); const next = cur; await actions.sendMessage(applyMessage(changes.join(" · "), { changes: changedIds.map(id => changeOf(id, saved[id], cur[id])) })); setSaved(next); setSaving(false); }
+  async function save() { setSaving(true); const next = cur; await actions.sendMessage(changes.join("\n")); setSaved(next); setSaving(false); }
   const open = (id: string) => { void actions.sendMessage(`Show ${id}`); };
   const team = issues[0]?.identifier.split("-")[0] ?? "";
   const sorted = [...issues].sort((a, b) => comp.sort === "newest" ? (b.createdAt ?? "").localeCompare(a.createdAt ?? "") : comp.sort === "priority" ? ((a.priority || 9) - (b.priority || 9)) : 0);

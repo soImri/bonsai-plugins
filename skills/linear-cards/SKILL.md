@@ -20,8 +20,9 @@ After the call returns, reply with at most one short line, or nothing. Never res
 
 Each one is exactly one tool call, then one short line (or nothing). Never call the Linear MCP yourself for these.
 
-- `Apply in Linear: …` followed by a ```json block (sent by Save changes, Comment, and Create issue): call `linearcards_apply` with exactly that JSON. It writes to Linear and redraws the card with what Linear saved. Bonsai may ask you to approve the write; that is expected.
+- A message starting `Save NEAT-10: …`, `Comment on NEAT-10:`, or `Create in NEAT: …` (sent by Save changes, Comment, and Create issue): call `linearcards_apply { message: <the whole message, verbatim> }`. The plugin parses it, writes to Linear, and redraws the card with what Linear saved. Do not rewrite or interpret the message. Bonsai may ask you to approve the write; that is expected.
 - `Show NEAT-7` (a row click): `linearcards_issue { identifier: "NEAT-7" }`.
+- Anything else the person asks you to change in Linear ("mark NEAT-10 done"): `linearcards_apply { changes: [{ identifier, state, priority (0-4), assignee, project, labels }] }` with only the fields that change.
 
 ## If the tool reports an error
 

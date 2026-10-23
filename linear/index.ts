@@ -12,7 +12,7 @@
 import { HttpError, defineConnector, classify, ms, type ToolRun } from "../runtime.ts";
 import { ISSUE_FIELDS, PRIORITY_NAMES, normalizeIssue, optionsOf, readIssues, teamContext, type Issue } from "./read.ts";
 import { createRubric, deriveTitle, settle, viewRubric, type Composition, type Picks } from "./rubrics.ts";
-import { applyChange, createIssue, describeChange, postComment, type Change, type Comment, type Create } from "./write.ts";
+import { applyChange, createIssue, describeChange, parseCardMessage, postComment, type Change, type Comment, type Create } from "./write.ts";
 import { mcpCall } from "./mcp.ts";
 
 const CALL_FIRST = "There is no need to read the skill first: Bonsai attaches it to this tool's result. After it returns, reply with at most one short line.";
@@ -88,7 +88,7 @@ export const linear = defineConnector({
     /* ---- newissue ---- */
     {
       name: "linearcards_newissue", label: "Linear new issue", failing: "prepare the draft",
-      description: `Draft a new Linear issue in the chat as Linear's create dialog. Call this FIRST with the person's words plus a short title: it reads the team's states, projects, labels and members itself (no linear:// or mcp reads, no repo research), Jev picks status, priority, project, labels and assignee from the task, and the person edits the card and presses Create issue. Do not create anything yourself; the card sends an 'Apply in Linear' message when the person is ready. ${CALL_FIRST}`,
+      description: `Draft a new Linear issue in the chat as Linear's create dialog. Call this FIRST with the person's words plus a short title: it reads the team's states, projects, labels and members itself (no linear:// or mcp reads, no repo research), Jev picks status, priority, project, labels and assignee from the task, and the person edits the card and presses Create issue. Do not create anything yourself; the card sends a 'Create in <team>:' message when the person is ready. ${CALL_FIRST}`,
       parameters: {
         type: "object",
         properties: {
@@ -109,7 +109,7 @@ export const linear = defineConnector({
         const draft = { team: team.key, title, description, state: picks.state, priority: picks.priority, ...(picks.assignee ? { assignee: picks.assignee } : {}), ...(picks.project ? { project: picks.project } : {}), labels: picks.labels, options: optionsOf(meta) };
         const summary = [draft.state, PRIORITY_NAMES[draft.priority], draft.project, draft.labels.join(", "), draft.assignee].filter(Boolean).join(" · ");
         return ok(
-          `Draft "${title}" shown as Linear's create dialog with ${summary} (${picks.by === "jev" ? `Jev picked, ${picks.variant} questions answered` : "default pick, Jev unavailable"}; Linear ${tLinear}, Jev ${tJev}). Stop here with at most one short line. When the person presses Create issue, the card sends an 'Apply in Linear' message with JSON: call linearcards_apply with exactly that JSON.`,
+          `Draft "${title}" shown as Linear's create dialog with ${summary} (${picks.by === "jev" ? `Jev picked, ${picks.variant} questions answered` : "default pick, Jev unavailable"}; Linear ${tLinear}, Jev ${tJev}). Stop here with at most one short line. When the person presses Create issue, a message starting 'Create in ${team.key}:' arrives: call linearcards_apply with that whole message in \`message\`.`,
           { kind: "draft", draft, picks: { by: picks.by, confidence: picks.confidence }, timing: { linear: tLinear, jev: tJev } },
         );
       },
@@ -118,20 +118,22 @@ export const linear = defineConnector({
     /* ---- apply ---- */
     {
       name: "linearcards_apply", label: "Apply in Linear", failing: "write to Linear",
-      description: `Write what the person did on a Linear card to Linear: pill changes saved with Save changes, a comment from the comment box, or a new issue from the create dialog. The card sends an 'Apply in Linear' message that carries a JSON block; call this with exactly that JSON (changes, comment, or create). It writes through Linear's MCP server, re-reads the touched issues, and the card redraws from Linear's truth. ${CALL_FIRST}`,
+      description: `Write what the person did on a Linear card to Linear. A card sends a short command as the person's message: 'Save NEAT-10: status → In Progress; labels → A, B' (one line per issue), 'Comment on NEAT-10:' followed by the body, or 'Create in NEAT: <title>' followed by a properties line and an optional 'Description:' block. When a message starts with Save, Comment on, or Create in, call this IMMEDIATELY with the whole message verbatim in \`message\`; the plugin parses it. For your own edits use the structured fields instead. It writes through Linear's MCP server, re-reads the touched issues, and the card redraws from Linear's truth. ${CALL_FIRST}`,
       parameters: {
         type: "object",
         properties: {
+          message: { type: "string", description: "A card's message, verbatim: starts with 'Save <id>:', 'Comment on <id>:', or 'Create in <team>:'." },
           changes: { type: "array", items: changeSchema, description: "Pill changes, one entry per issue. Only the fields that changed." },
           comment: { type: "object", properties: { identifier: { type: "string" }, body: { type: "string" } }, required: ["identifier", "body"] },
           create: { type: "object", properties: { team: { type: "string" }, title: { type: "string" }, description: { type: "string" }, state: { type: "string" }, priority: { type: "integer", minimum: 0, maximum: 4 }, assignee: { type: "string" }, project: { type: "string" }, labels: { type: "array", items: { type: "string" } } }, required: ["team", "title"] },
         },
       },
       async run({ token, params, signal, startedAt, cache, ok }: ToolRun) {
-        const changes: Change[] = params.changes ?? [];
-        const comment: Comment | undefined = params.comment;
-        const create: Create | undefined = params.create;
-        if (!changes.length && !comment && !create) return ok("Nothing to apply: pass changes, comment, or create.", { error: "Nothing to apply." });
+        const parsed = typeof params.message === "string" ? parseCardMessage(params.message) : { changes: [] as Change[] };
+        const changes: Change[] = [...parsed.changes, ...(params.changes ?? [])];
+        const comment: Comment | undefined = params.comment ?? parsed.comment;
+        const create: Create | undefined = params.create ?? parsed.create;
+        if (!changes.length && !comment && !create) return ok("Nothing to apply: the message did not parse as a card command and no changes, comment, or create were passed.", { error: "Nothing to apply." });
         const applied: string[] = [];
         const touched = new Set<string>();
         await Promise.all(changes.map(async (c) => { await applyChange(token, c, signal); applied.push(describeChange(c)); touched.add(c.identifier.toUpperCase()); }));
