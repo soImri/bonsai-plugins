@@ -241,6 +241,38 @@ function failure(err: unknown, context: string) {
 
 type ToolParams = Record<string, any>;
 
+/**
+ * Jev with envelope fallbacks. The hosted gateway's adapter answers 400 to an envelope shape it
+ * refuses (seen 2026-10-23 for rubrics carrying bool questions with {true,false} criteria). A 400
+ * comes back in ~50 ms, so trying a reduced shape costs nothing: A) as written; B) bool criteria
+ * folded into the instructions; C) bools recast as yes/no choices. The variant that answered is
+ * reported so the shape rule can be learned once and the others dropped.
+ */
+async function classifyAdaptive(jev: any, state: object, questions: Record<string, any>): Promise<{ answers: Record<string, any>; variant: string }> {
+  const foldBool = (q: any) => (q.type === "bool" && q.criteria ? { type: "bool", instructions: `${q.instructions} Yes when: ${q.criteria.true} No when: ${q.criteria.false}` } : q);
+  const toChoice = (q: any) => (q.type === "bool" ? { type: "choice", instructions: q.instructions, criteria: { yes: q.criteria?.true ?? "Yes.", no: q.criteria?.false ?? "No." } } : q);
+  const variants: [string, Record<string, any>][] = [
+    ["A", questions],
+    ["B", Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, foldBool(q)]))],
+    ["C", Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, toChoice(q)]))],
+  ];
+  let lastErr: unknown;
+  for (const [variant, qs] of variants) {
+    try {
+      const { answers } = await jev.classify({ state, questions: qs });
+      // Normalise variant C back to bool answers so callers read one shape.
+      const out: Record<string, any> = {};
+      for (const [k, a] of Object.entries<any>(answers)) out[k] = questions[k]?.type === "bool" && a?.type === "choice" ? { type: "bool", probability: a.probabilities?.yes ?? (a.choice === "yes" ? a.confidence : 1 - a.confidence) } : a;
+      return { answers: out, variant };
+    } catch (err) {
+      lastErr = err;
+      const status = (err as any)?.status;
+      if ((err as any)?.kind !== "http" || status !== 400) throw err;
+    }
+  }
+  throw lastErr;
+}
+
 export function activate(api: any) {
   const withJev = typeof api.withJev === "function" ? api.withJev : (_use: unknown, fallback: () => unknown) => Promise.resolve(fallback());
 
@@ -286,10 +318,9 @@ export function activate(api: any) {
         const tJev0 = Date.now();
         const comp: Composition = await withJev(
           async (jev: any) => {
-            const { answers } = await jev.classify({
-              // Flat state on purpose: the hosted Jev route answered 400 to a nested object (2026-10-23).
-              state: { task: params.task, openCount: byType.open, activeCount: byType.active, doneCount: byType.done, totalCount: byType.total, identifiersNamed: (params.identifiers ?? []).join(", ") || "none", projectNamed: params.project ?? "none", distinctProjects: new Set(all.map((i) => i.project).filter(Boolean)).size, sample },
-              questions: {
+            const { answers, variant } = await classifyAdaptive(jev,
+              { task: params.task, openCount: byType.open, activeCount: byType.active, doneCount: byType.done, totalCount: byType.total, identifiersNamed: (params.identifiers ?? []).join(", ") || "none", projectNamed: params.project ?? "none", distinctProjects: new Set(all.map((i) => i.project).filter(Boolean)).size, sample },
+              {
                 scope: { type: "choice", instructions: "Which issues does the task want to see? Judge the wording. Examples: 'what's open', 'my issues', 'todo', 'triage', 'what's left', 'backlog' -> open; 'in progress', 'what's being worked on', 'wip' -> active; 'what shipped', 'what's done', 'completed', 'closed' -> done; 'everything', 'all issues', 'where do we stand', 'overview', 'board', or the task names specific identifiers -> all.",
                   criteria: { open: "Unfinished work: triage, backlog, todo, in progress, in review.", active: "Only work that has started: in progress, in review.", done: "Only completed issues.", all: "Every issue regardless of state." } },
                 view: { type: "choice", instructions: "Pick the Linear composition that answers the task. Judge the wording first, then the counts. Examples: 'show NEAT-9', one identifier -> issue; 'what's open', 'my issues', 'triage', 'list the bugs' -> list; 'where do we stand', 'how is the team doing', 'standup', 'what's blocked', 'overview' -> board; 'how is <project> going', 'what's left in <project>', 'project status' -> project.",
@@ -304,12 +335,12 @@ export function activate(api: any) {
                 assignee: { type: "bool", instructions: "Show the assignee?", criteria: { true: "Ownership matters, more than one person is involved, or the task asks who.", false: "One person does everything here, or ownership is beside the point." } },
                 project: { type: "bool", instructions: "Show the project of each issue?", criteria: { true: "Issues span more than one project, or the task mentions projects.", false: "All issues share one project, or the view already groups by project." } },
               },
-            });
+            );
             const pick = (k: string) => (answers[k]?.type === "choice" ? answers[k].choice : undefined);
             const yes = (k: string) => answers[k]?.type === "bool" && answers[k].probability >= 0.5;
             if (!pick("view")) return undefined;
             const groupBy = (pick("groupBy") ?? "status") as Composition["groupBy"];
-            return { view: pick("view"), groupBy, sort: pick("sort") ?? "priority", scope: (params.identifiers?.length ? "all" : pick("scope") ?? "open"), fields: { description: yes("description"), labels: yes("labels"), dates: yes("dates"), assignee: yes("assignee"), project: yes("project") && groupBy !== "project" }, by: "jev", confidence: answers.view.confidence } as Composition;
+            return { view: pick("view"), groupBy, sort: pick("sort") ?? "priority", scope: (params.identifiers?.length ? "all" : pick("scope") ?? "open"), fields: { description: yes("description"), labels: yes("labels"), dates: yes("dates"), assignee: yes("assignee"), project: yes("project") && groupBy !== "project" }, by: "jev", confidence: answers.view.confidence, variant } as Composition & { variant: string };
           },
           () => ({ ...guessComposition(params.task, all.length, projectNamed), scope: params.identifiers?.length ? "all" : guessScope(params.task) } as Composition),
           { timeoutMs: 6000, purpose: "linear-view", ...(signal ? { signal } : {}) },
@@ -322,7 +353,7 @@ export function activate(api: any) {
         if (comp.view === "project" && comp.groupBy === "project") comp.groupBy = "status";
         if (comp.view === "issue") comp.fields.description = true;
         const project = comp.view === "project" ? (meta.projects.find((p) => p.name.toLowerCase() === (params.project ?? issues[0]?.project ?? "").toLowerCase()) ?? (params.project ? { name: params.project } : undefined)) : undefined;
-        const who = comp.by === "jev" ? "Jev picked" : "default pick, Jev unavailable";
+        const who = comp.by === "jev" ? `Jev picked, envelope ${(comp as any).variant ?? "A"}` : "default pick, Jev unavailable";
         const how = comp.view === "board" || comp.view === "project" ? ` grouped by ${comp.groupBy}` : "";
         if (!issues.length) return text(`No ${comp.scope === "all" ? "" : `${comp.scope} `}issues in ${team.key} match. Say so in one line.`, { kind: "view", task: params.task, team: team.key, issues: [], options: optionsOf(meta), composition: comp, timing: { linear: tFetch, jev: tJev } });
         return text(
@@ -411,7 +442,7 @@ export function activate(api: any) {
               assignToMe: { type: "bool", instructions: "Should the issue be assigned to the person asking?", criteria: { true: "The task says me, my, I will, mine, or the team has one member who does everything.", false: "The task names someone else or says nothing about ownership on a multi-person team." } },
             };
             labelsAsked.forEach((l, i) => { questions[`label_${i}`] = { type: "bool", instructions: `Apply the label "${l.name}"?`, criteria: { true: l.description ? `The task matches this label: ${l.description}` : `The task is about ${l.name.toLowerCase()}.`, false: "The label does not fit the task." } }; });
-            const { answers } = await jev.classify({ state: { task: params.task, title, description: description || "none", teamMembers: meta.members.join(", ") || "none", viewer: meta.viewer || "unknown" }, questions });
+            const { answers, variant } = await classifyAdaptive(jev, { task: params.task, title, description: description || "none", teamMembers: meta.members.join(", ") || "none", viewer: meta.viewer || "unknown" }, questions);
             if (answers.priority?.type !== "choice") return undefined;
             const pr = { none: 0, urgent: 1, high: 2, medium: 3, low: 4 }[answers.priority.choice as string] ?? 0;
             const explicit = guessPriority(params.task);
@@ -420,7 +451,7 @@ export function activate(api: any) {
             const project = projectPick?.name;
             const statePick = answers.state?.type === "choice" ? openStates[Number(String(answers.state.choice).slice(1))] : undefined;
             const assignee = answers.assignToMe?.type === "bool" && answers.assignToMe.probability >= 0.5 ? meta.viewer : undefined;
-            return { state: statePick?.name ?? defaultState?.name, priority: explicit || pr, project, labels, assignee, by: "jev" as const, confidence: answers.priority.confidence };
+            return { state: statePick?.name ?? defaultState?.name, priority: explicit || pr, project, labels, assignee, by: "jev" as const, confidence: answers.priority.confidence, variant };
           },
           fallback,
           { timeoutMs: 6000, purpose: "linear-new-issue", ...(signal ? { signal } : {}) },
@@ -429,7 +460,7 @@ export function activate(api: any) {
         const draft = { team: team.key, title, description, state: picks.state, priority: picks.priority, ...(picks.assignee ? { assignee: picks.assignee } : {}), ...(picks.project ? { project: picks.project } : {}), labels: picks.labels, options: optionsOf(meta) };
         const summary = [draft.state, ["No priority", "Urgent", "High", "Medium", "Low"][draft.priority], draft.project, draft.labels.join(", "), draft.assignee].filter(Boolean).join(" · ");
         return text(
-          `Draft "${title}" shown as Linear's create dialog with ${summary} (${picks.by === "jev" ? "Jev picked" : "default pick"}; Linear ${tFetch}, Jev ${tJev}). Stop here with at most one short line. The person edits the card and presses Create issue; a 'Create Linear issue' message then arrives with the final JSON. Only then create it: mcp(server: "linear", tool: "save_issue", args: {team, title, description, state, priority, assignee, project, labels}), then call linearcards_issue with the new identifier.`,
+          `Draft "${title}" shown as Linear's create dialog with ${summary} (${picks.by === "jev" ? `Jev picked, envelope ${(picks as any).variant}` : "default pick, Jev unavailable"}; Linear ${tFetch}, Jev ${tJev}). Stop here with at most one short line. The person edits the card and presses Create issue; a 'Create Linear issue' message then arrives with the final JSON. Only then create it: mcp(server: "linear", tool: "save_issue", args: {team, title, description, state, priority, assignee, project, labels}), then call linearcards_issue with the new identifier.`,
           { kind: "draft", draft, picks: { by: picks.by, confidence: (picks as any).confidence }, timing: { linear: tFetch, jev: tJev } },
         );
       } catch (err) { return failure(err, "prepare the draft"); }
