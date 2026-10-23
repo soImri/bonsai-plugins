@@ -12,7 +12,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button, Pill } from "@bonsai/plugin-ui-sdk/ui";
-import { useKayActions } from "@bonsai/frontend-sdk";
+import { useKayActions, useKayFrontendContext } from "@bonsai/frontend-sdk";
 
 /* ---------- types ---------- */
 type State = { name: string; type?: string };
@@ -96,7 +96,23 @@ const UserGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14"><circle 
 const ProjectGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M7 1.5l5 2.8v5.4L7 12.5 2 9.7V4.3z" /><path d="M2 4.3l5 2.8 5-2.8M7 7.1v5.4" /></svg>;
 const LabelGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 7.2V2.5h4.7L12 7.8 7.3 12.5z" strokeLinejoin="round" /><circle cx="5" cy="5.5" r="1" fill="currentColor" stroke="none" /></svg>;
 const OpenGlyph = () => <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v7A1.5 1.5 0 0 0 3.5 13h7a1.5 1.5 0 0 0 1.5-1.5V9M9 2h4v4M13 2L7 8" /></svg>;
-const TeamChip = ({ k }: { k: string }) => <Pill size="sm" surface="glass" lead={<span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: v("success") }} />}>{k}</Pill>;
+/** Linear's breadcrumb team chip. With `onClick` it navigates (to the team's board in the chat); without, it is a plain label. */
+const TeamChip = ({ k, onClick }: { k: string; onClick?: () => void }) => {
+  const lead = <span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: v("success") }} />;
+  if (!onClick) return <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: v("text-primary") }}>{lead}{k}</span>;
+  return <Pill size="sm" surface="glass" lead={lead} onClick={onClick} title={`Open the ${k} board`} aria-label={`Open the ${k} board`}>{k}</Pill>;
+};
+/** Opens a URL in the system browser; a bare anchor does not leave the app. */
+function OpenInLinear({ url }: { url: string }) {
+  const { kayApi } = useKayFrontendContext();
+  return (
+    <button type="button" onClick={() => { void kayApi.openExternalUrl(url); }} title="Open in Linear" aria-label="Open in Linear"
+      style={{ ...bare, display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 6, color: v("text-secondary"), cursor: "pointer" }}
+      onMouseEnter={e => (e.currentTarget.style.background = v("interactive-hover"))} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+      <OpenGlyph />
+    </button>
+  );
+}
 
 /* ---------- Picker: a pill (or a bare glyph) that opens a portaled list ---------- */
 function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title }: {
@@ -238,8 +254,8 @@ function IssueCard({ call, phase, rawArgs, rawResult, sessionId, note }: Rendere
     <section style={card}>
       <div style={pad}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ ...row, fontSize: 12, ...muted }}><TeamChip k={issue.identifier.split("-")[0]} /><span>›</span><span style={mono}>{issue.identifier}</span></div>
-          {issue.url ? <a href={issue.url} target="_blank" rel="noreferrer" aria-label="Open in Linear" style={{ ...muted, display: "inline-flex" }}><OpenGlyph /></a> : null}
+          <div style={{ ...row, fontSize: 12, ...muted }}><TeamChip k={issue.identifier.split("-")[0]} onClick={() => { void actions.sendMessage(`Where do we stand on ${issue!.identifier.split("-")[0]}?`); }} /><span>›</span><span style={mono}>{issue.identifier}</span></div>
+          {issue.url ? <OpenInLinear url={issue.url} /> : null}
         </div>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
         {issue.description ? <Description md={issue.description} /> : null}
@@ -388,7 +404,7 @@ function ComposedView({ call, phase, rawArgs, rawResult, sessionId, runningText 
       <div style={{ ...pad, gap: 8 }}>
         {comp.view === "project" ? (
           <>
-            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>›</span><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ProjectGlyph />Project</span></div>
+            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} onClick={() => { void actions.sendMessage(`Where do we stand on ${team}?`); }} /> : null}<span>›</span><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ProjectGlyph />Project</span></div>
             <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{args.project?.name ?? issues[0]?.project ?? "Project"}</h2>
             {args.project?.description ? <div style={{ ...muted, lineHeight: "22px" }}>{args.project.description}</div> : null}
             <ProgressBar done={done} total={issues.length} />
@@ -400,7 +416,7 @@ function ComposedView({ call, phase, rawArgs, rawResult, sessionId, runningText 
           </>
         ) : (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
+            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} onClick={comp.view === "board" ? undefined : () => { void actions.sendMessage(`Where do we stand on ${team}?`); }} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
             <span style={{ ...muted, fontSize: 12, maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{args.task}</span>
           </div>
         )}
