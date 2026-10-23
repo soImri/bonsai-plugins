@@ -26,7 +26,7 @@ type Draft = { team: string; title: string; description?: string; state: string;
 type Fields = { description?: boolean; labels?: boolean; dates?: boolean; assignee?: boolean; project?: boolean };
 type Composition = { view: "issue" | "list" | "board" | "project"; groupBy?: "status" | "project" | "assignee" | "priority"; sort?: "priority" | "newest" | "none"; fields: Fields; by: "jev" | "fallback"; confidence?: number };
 type ViewArgs = { task: string; issues: Issue[]; options?: Options; project?: { name: string; lead?: string; targetDate?: string; description?: string } };
-type RendererProps = { phase: string; rawArgs?: string; rawResult?: string; sessionId: string };
+type RendererProps = { call?: { resultDetails?: unknown; resultText?: string }; phase: string; rawArgs?: string; rawResult?: string; sessionId: string };
 type Props = { state?: State; priority: number; assignee?: string; project?: string; labels: string[] };
 
 /* ---------- tokens and helpers ---------- */
@@ -45,8 +45,17 @@ const row: CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "cen
 const mono: CSSProperties = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
 const footer: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: `1px solid ${v("border")}`, padding: "10px 16px" };
 function parse<T>(raw: string | undefined): T | null { if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } }
-/** v2: the tool fetches from Linear and returns the render payload in its result's details; v1 passed it in the arguments. */
-function detailsOf(rawResult: string | undefined): any { const r = parse<any>(rawResult); return r?.details ?? null; }
+/**
+ * v2: the tool returns the render payload in its result's `details`. Bonsai hands a renderer that
+ * object as `call.resultDetails`; `rawResult` is only the result's prose text (and is cut to 4 KB on
+ * reload), so it is parsed only as a last resort. v1 passed the payload in the arguments.
+ */
+function detailsOf(call: RendererProps["call"], rawResult: string | undefined): any {
+  const d = call?.resultDetails;
+  if (d && typeof d === "object") return d;
+  const r = parse<any>(rawResult);
+  return r?.details ?? (r && typeof r === "object" && ("issues" in r || "issue" in r || "draft" in r) ? r : null);
+}
 function ErrorCard({ message }: { message: string }) { return <div style={{ ...card, ...pad, ...muted }}>{message}</div>; }
 function Timing({ t }: { t?: { linear?: string; jev?: string } }) { if (!t) return null; return <span>{[t.linear ? `Linear ${t.linear}` : null, t.jev ? `Jev ${t.jev}` : null].filter(Boolean).join(" · ")}</span>; }
 const day = (s?: string) => (s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
@@ -215,8 +224,8 @@ function Description({ md }: { md: string }) {
 }
 
 /* ---------- IssueCard: the core view ---------- */
-function IssueCard({ phase, rawArgs, rawResult, sessionId, note }: RendererProps & { note?: string }) {
-  const details = useMemo(() => detailsOf(rawResult), [rawResult]);
+function IssueCard({ call, phase, rawArgs, rawResult, sessionId, note }: RendererProps & { note?: string }) {
+  const details = useMemo(() => detailsOf(call, rawResult), [call?.resultDetails, rawResult]);
   const issue = useMemo<Issue | null>(() => details?.issue ?? parse<Issue>(rawArgs), [details, rawArgs]);
   const actions = useKayActions(sessionId);
   const states = issue?.options?.states?.length ? issue.options.states : DEFAULT_STATES;
@@ -251,8 +260,8 @@ function IssueCard({ phase, rawArgs, rawResult, sessionId, note }: RendererProps
 }
 
 /* ---------- NewIssueCard: Linear's create dialog ---------- */
-function NewIssueCard({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
-  const details = useMemo(() => detailsOf(rawResult), [rawResult]);
+function NewIssueCard({ call, phase, rawArgs, rawResult, sessionId }: RendererProps) {
+  const details = useMemo(() => detailsOf(call, rawResult), [call?.resultDetails, rawResult]);
   const draft = useMemo<Draft | null>(() => details?.draft ?? parse<Draft>(rawArgs), [details, rawArgs]);
   const actions = useKayActions(sessionId);
   const states = draft?.options?.states?.length ? draft.options.states : DEFAULT_STATES;
@@ -332,12 +341,16 @@ function readComposition(rawResult: string | undefined, n: number): Composition 
   return fallback;
 }
 
-function ComposedView({ phase, rawArgs, rawResult, sessionId, runningText }: RendererProps & { runningText?: string }) {
-  const details = useMemo(() => detailsOf(rawResult), [rawResult]);
+function ComposedView({ call, phase, rawArgs, rawResult, sessionId, runningText }: RendererProps & { runningText?: string }) {
+  const details = useMemo(() => detailsOf(call, rawResult), [call?.resultDetails, rawResult]);
   const args = useMemo<ViewArgs | null>(() => (Array.isArray(details?.issues) ? (details as ViewArgs) : parse<ViewArgs>(rawArgs)), [details, rawArgs]);
   const actions = useKayActions(sessionId);
   const issues = args?.issues ?? [];
-  const comp = useMemo(() => readComposition(rawResult, issues.length), [rawResult, issues.length]);
+  const comp = useMemo<Composition>(() => {
+    const c = details?.composition;
+    const fb = readComposition(undefined, issues.length);
+    return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...(c.fields ?? {}) } } : readComposition(rawResult, issues.length);
+  }, [details, rawResult, issues.length]);
   const states = args?.options?.states?.length ? args.options.states : DEFAULT_STATES;
   const seed = useMemo(() => Object.fromEntries(issues.map(i => [i.identifier, propsOf(i, states)])) as Record<string, Props>, [args]);
   const [saved, setSaved] = useState(seed);
