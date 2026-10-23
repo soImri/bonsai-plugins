@@ -10,7 +10,7 @@
  * Reads and writes use Slack's Web API with Bonsai's Slack sign-in. Channel history is limited to
  * one read per minute per workspace, so channel views fall back to search when the minute is used.
  */
-import { HttpError, defineConnector, classify, ms, type Run, type CardResult } from "../../runtime.ts";
+import { HttpError, defineConnector, classify, ms, type Run, type CardResult, remembered } from "../../runtime.ts";
 import { SlackError, findChannel, postMessage, react, readChannel, readInbox, readMeta, readThread, type Channel, type Message, type Meta } from "./api.ts";
 import { RANGE_DAYS, RANGE_LABEL, draftRubric, viewRubric, type Composition, type Picks } from "./rubrics.ts";
 import { viewFollowUps } from "./rubrics.ts";
@@ -63,7 +63,7 @@ export const slack = defineConnector({
     return err instanceof HttpError ? err.message : undefined;
   },
 
-  async view({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
+  async view({ token, params, signal, startedAt, jev, cache, history, followUps, recall }: Run): Promise<CardResult> {
     const meta = await readMeta(token, cache, signal);
     const task: string = params.task ?? "";
     const f = params.filters ?? {};
@@ -80,7 +80,7 @@ export const slack = defineConnector({
     const rubric = viewRubric(task, view, messages, channel);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
     const [{ value, took: tJev }, fu] = await Promise.all([
-      jev({ purpose: "slack-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess),
+      remembered(recall, () => jev({ purpose: "slack-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess)),
       followUps("slack-follow-ups", { task, shape: view, messageCount: messages.length, mentions: messages.filter((m) => m.mentionsMe).length, sample: messages.slice(-4).map((m) => `${m.user}: ${m.text.slice(0, 80)}`) }, viewFollowUps(task, view, messages)),
     ]);
     const comp = value as Composition;
@@ -93,8 +93,8 @@ export const slack = defineConnector({
     const payload = { kind: "view", task, me: meta.me, view, ...(channel ? { channel: channelInfo(channel) } : {}), ...(ts ? { threadTs: ts } : {}), messages, conversations: conversationsFor(meta), composition: comp, via, timing: { slack: tSlack, jev: tJev } };
     const picked = `${view}, ${comp.range}, ${comp.focus}`;
     const label = view === "thread" ? "thread" : view === "channel" ? `#${channel!.name}` : `inbox (${RANGE_LABEL[comp.range]}${comp.focus !== "all" ? `, ${comp.focus}` : ""})`;
-    if (!messages.length) return { summary: `No messages for ${label}; the card says so. Reply with nothing.`, payload, picked, offered: fu.actions };
-    return { summary: `Card shown (${shown.length} messages, ${label}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions };
+    if (!messages.length) return { summary: `No messages for ${label}; the card says so. Reply with nothing.`, payload, picked, offered: fu.actions, remember: comp };
+    return { summary: `Card shown (${shown.length} messages, ${label}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions, remember: comp };
   },
 
   async record({ token, params, signal, startedAt, cache, followUps }: Run): Promise<CardResult> {
@@ -109,7 +109,7 @@ export const slack = defineConnector({
     }
     const r = await readChannel(token, meta, c, 14, signal);
     const fu = await followUps("slack-follow-ups", { task: params.ref, shape: "channel", messageCount: r.messages.length }, viewFollowUps(String(params.ref ?? ""), "channel", r.messages));
-    return { summary: `Card shown (#${c.name}). Reply with nothing.`, offered: fu.actions, picked: `channel${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true, followUps: fu.actions }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
+    return { summary: `Card shown (#${c.name}). Reply with nothing.`, offered: fu.actions, remember: { by: fu.by }, picked: `channel${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true, followUps: fu.actions }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -147,7 +147,7 @@ export const slack = defineConnector({
     if (reply) { await postMessage(token, target.id, reply.text, reply.ts, signal); applied.push(`replied in #${target.name}`); threadTs = reply.ts; }
     if (reaction) { await react(token, target.id, reaction.ts, reaction.emoji, signal); applied.push(`reacted :${reaction.emoji}:`); threadTs = reaction.ts; }
     const tWrite = ms(startedAt);
-    const used = [...(post ? ["compose"] : []), ...(reply ? ["reply", "compose"] : []), ...(reaction ? ["react"] : [])];
+    const used = [...(post ? ["compose"] : []), ...(reply ? ["reply"] : []), ...(reaction ? ["react"] : [])];
     // Redraw from Slack's truth: the thread when we touched one, else the channel (history budget permitting, search otherwise).
     let messages: Message[]; let via: string; let view: Composition["view"];
     if (threadTs && !post) { messages = await readThread(token, meta, target, threadTs, signal); via = "replies"; view = "thread"; }

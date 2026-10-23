@@ -5,7 +5,7 @@
 import { choiceOf, yesOf, type FollowUp, type JevAnswers, type JevQuestion } from "../../runtime.ts";
 import type { Record } from "./api.ts";
 
-export type Composition = { view: "list" | "record"; fields: { body: boolean }; by: "jev" | "fallback"; confidence?: number; variant?: string; followUps?: string[] };
+export type Composition = { view: "list" | "record"; fields: { body: boolean }; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string; followUps?: string[] };
 
 export function viewRubric(task: string, records: Record[]) {
   const guess: Composition = { view: records.length === 1 ? "record" : "list", fields: { body: records.length === 1 }, by: "fallback" };

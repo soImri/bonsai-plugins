@@ -19,7 +19,7 @@
 
 **Keys:** events are named `#a1b2c3` (a hash of calendar + event id) in cards and messages; the key → id map lives in the connector's cache.
 
-**Follow-ups (Jev picks up to three per card; `More` reveals the rest):**
+**Follow-ups (up to three per card, picked from the ask, the context and the recipe for similar asks; a property that is not picked shows as data):**
 
 | Screen | Primary surface | Follow-up candidates (`when`) |
 | --- | --- | --- |

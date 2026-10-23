@@ -8,7 +8,7 @@
  *
  * Reads and writes use Google Calendar v3 with Bonsai's Google sign-in (calendar scopes).
  */
-import { HttpError, defineConnector, classify, ms, type Run, type CardResult } from "../../runtime.ts";
+import { HttpError, defineConnector, classify, ms, type Run, type CardResult, remembered } from "../../runtime.ts";
 import { createEvent, deleteEvent, freeBusy, getEvent, listEvents, mergeAttendees, patchEvent, readMeta, rememberKeys, resolveKey, rsvp, type Busy, type Calendar, type Event, type EventBody } from "./api.ts";
 import { RANGE_LABEL, createRubric, dayBounds, dayStart, monthGrid, rangeBounds, toGoogleTime, tzParts, viewRubric, wall, type Composition, type Picks, type Range } from "./rubrics.ts";
 import { agendaFollowUps, draftFollowUps, eventFollowUps } from "./rubrics.ts";
@@ -137,7 +137,7 @@ export const gcal = defineConnector({
   filters: { calendar: "a calendar's name, to look at one calendar only", date: "one day, YYYY-MM-DD, when the ask names a specific date" },
   explain: (err) => (err instanceof HttpError ? (err.status === 401 ? "Google rejected Bonsai's sign-in (HTTP 401). Reconnect Google in App Store → Installed → Google Calendar → Connections." : err.status === 403 ? "Google refused (HTTP 403): the connected Google account has not granted calendar access to Bonsai. Reconnect Google Calendar in App Store → Installed." : undefined) : undefined),
 
-  async view({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
+  async view({ token, params, signal, startedAt, jev, cache, history, followUps, recall }: Run): Promise<CardResult> {
     const meta = await readMeta(token, cache, signal);
     const tz = meta.timeZone;
     const now = new Date();
@@ -165,7 +165,7 @@ export const gcal = defineConnector({
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
     const g0 = rubric.guess;
     const [{ value, took: tJev }, fu] = await Promise.all([
-      jev({ purpose: "gcal-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess),
+      remembered(recall, () => jev({ purpose: "gcal-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess)),
       followUps("gcal-follow-ups", { task, shape: refs.length === 1 || all.length === 1 ? "event" : g0.view, eventCount: all.length }, refs.length === 1 || all.length === 1 ? eventFollowUps(task, all[0] ?? {}) : agendaFollowUps(task, g0.view, all)),
     ]);
     const comp = value as Composition;
@@ -205,8 +205,8 @@ export const gcal = defineConnector({
     const picked = `${comp.view}, range ${comp.range}${comp.fields.attendees ? ", with guests" : ""}${comp.fields.location ? ", with locations" : ""}${comp.fields.invitesOnly ? ", invites only" : ""}`;
     const viewName = comp.view === "event" ? "an event card" : comp.view === "month" ? "a month grid" : comp.view === "free" ? "a find-a-time view" : "an agenda";
     void who; void viewName;
-    if (!events.length && comp.view !== "free") return { summary: `No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${rangeLabel.toLowerCase()}; the card says so and offers other ranges. Reply with nothing.`, payload, picked, offered: fu.actions };
-    return { summary: `Card shown (${comp.view === "free" ? "find a time" : `${events.length} event${events.length === 1 ? "" : "s"}, ${rangeLabel}`}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions };
+    if (!events.length && comp.view !== "free") return { summary: `No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${rangeLabel.toLowerCase()}; the card says so and offers other ranges. Reply with nothing.`, payload, picked, offered: fu.actions, remember: comp };
+    return { summary: `Card shown (${comp.view === "free" ? "find a time" : `${events.length} event${events.length === 1 ? "" : "s"}, ${rangeLabel}`}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions , remember: comp };
   },
 
   async record({ token, params, signal, startedAt, cache, followUps, context }: Run): Promise<CardResult> {
@@ -215,7 +215,7 @@ export const gcal = defineConnector({
     if (!ev) throw new Error(`No event matches "${params.ref}" in the next two weeks.`);
     await rememberKeys(cache, [ev]);
     const fu = await followUps("gcal-follow-ups", { task: params.ref, event: { title: ev.title, start: ev.start, myResponse: ev.myResponse ?? "own", guests: ev.attendees.length } }, eventFollowUps(`${params.ref} ${context ?? ""}`, ev));
-    return { summary: `Card shown ("${ev.title}"). Reply with nothing.`, picked: `event${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions, payload: { kind: "event", followUps: fu.actions, timeZone: meta.timeZone, event: ev, calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), timing: { google: ms(startedAt) } } };
+    return { summary: `Card shown ("${ev.title}"). Reply with nothing.`, picked: `event${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions, remember: { by: fu.by }, payload: { kind: "event", followUps: fu.actions, timeZone: meta.timeZone, event: ev, calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), timing: { google: ms(startedAt) } } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
@@ -241,7 +241,7 @@ export const gcal = defineConnector({
     return {
       summary: `Create dialog shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Create event:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft, calendars: meta.calendars.filter((c) => c.writable).map((c) => ({ id: c.id, name: c.name, color: c.color, primary: c.primary })), picks: { by: picks.by, confidence: picks.confidence }, timing: { google: tGoogle, jev: tJev } },
-      picked: `${allDay ? "all day" : `${picks.durationMin} min`}${draft.meet ? ", Meet" : ""}, calendar ${calendar?.name ?? "primary"}`, offered: fu.actions,
+      picked: `${allDay ? "all day" : `${picks.durationMin} min`}${draft.meet ? ", Meet" : ""}, calendar ${calendar?.name ?? "primary"}`, offered: fu.actions, remember: { by: fu.by },
     };
   },
 

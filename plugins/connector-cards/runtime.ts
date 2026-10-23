@@ -67,7 +67,7 @@ function diskCache(dir: string | undefined): DiskCache {
 
 /* ---------- the pick log: what Jev chose, what the person then changed ---------- */
 export type CardKind = "view" | "record" | "draft" | "apply";
-type Pick = { at: string; connector: string; kind: CardKind; task: string; picked: string; correction?: string; context?: string; offered?: string[]; used?: string[] };
+type Pick = { at: string; connector: string; kind: CardKind; task: string; picked: string; correction?: string; context?: string; offered?: string[]; used?: string[]; recipe?: string; by?: string };
 const STOP = new Set(["the", "a", "an", "my", "me", "i", "in", "on", "of", "for", "to", "is", "are", "what", "whats", "what's", "show", "do", "have", "this", "that", "with", "and", "please", "can", "you"]);
 const words = (s: string) => new Set(String(s ?? "").toLowerCase().replace(/[^a-z0-9#' -]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)));
 
@@ -95,8 +95,88 @@ async function noteUsed(cache: DiskCache, connector: string, used: string[]) {
   const all = await readPicks(cache);
   const last = [...all].reverse().find((p) => p.connector === connector && p.kind !== "apply" && Date.now() - new Date(p.at).getTime() < 2 * 3600e3);
   if (!last) return;
-  last.used = [...new Set([...(last.used ?? []), ...used])];
+  const first = !last.used?.length;
+  const mapped = last.recipe && first ? await scoreRecipe(cache, last.recipe, last.offered ?? [], used) : used;
+  last.used = [...new Set([...(last.used ?? []), ...mapped])];
   await cache.write("picks", all.slice(-300));
+}
+
+/* ---------- recipes: the memory of how similar asks were solved, and how well ---------- */
+/**
+ * A recipe is one remembered solution: for asks like this one (same connector and kind, similar
+ * words, similar context) the card was composed this way with these follow-ups. Each recipe keeps
+ * a record: how many times it ran, how many times the person's next move was covered by what the
+ * card offered (success) versus needed something it had not (miss). A recipe with two or more uses
+ * and a clean enough record is reused as is, with no Jev call; otherwise Jev decides again (with
+ * the recipe's history in its state) and the recipe is re-learned from that decision.
+ */
+export type Recipe = {
+  id: string; connector: string; kind: CardKind;
+  taskWords: string[]; contextWords: string[]; examples: string[];
+  /** The composition shape to reuse (views only; draft picks depend on the content and are not remembered). */
+  composition?: Record<string, unknown>;
+  /** Which follow-ups this recipe offers, and how often each was used; the top MAX_FOLLOW_UPS by use are offered. */
+  followUpUses: Record<string, number>;
+  /** What each candidate control covers (from the screen's candidates), so a move reported as "priority" scores the list's "edit". */
+  covers?: Record<string, string[]>;
+  uses: number; successes: number; misses: number; lastAt: string;
+};
+export type Recall = { recipe: Recipe; eligible: boolean; composition?: Record<string, unknown>; followUps?: string[] };
+const REF = /\b(?:[A-Z][A-Z0-9]{1,9}-\d+|#[a-z0-9]{6}|C[0-9A-Z]{8,}(?:\/\d{10}\.\d{6})?)\b/g;
+const sig = (s: string) => [...words(String(s ?? "").replace(REF, " <ref> "))].sort();
+const jaccard = (a: string[], b: string[]) => { if (!a.length && !b.length) return 1; const A = new Set(a); const n = b.filter((w) => A.has(w)).length; return n / (new Set([...a, ...b]).size || 1); };
+const rateOf = (r: Recipe) => (r.successes + r.misses ? r.successes / (r.successes + r.misses) : 1);
+const recipeFollowUps = (r: Recipe) => Object.entries(r.followUpUses).sort((a, b) => b[1] - a[1]).slice(0, MAX_FOLLOW_UPS).map(([id]) => id);
+async function readRecipes(cache: DiskCache): Promise<Recipe[]> { return (await cache.read<Recipe[]>("recipes")) ?? []; }
+
+/** The closest recipe for this ask, and whether its record earns reuse without Jev. */
+export async function recallRecipe(cache: DiskCache, connector: string, kind: CardKind, task: string, context: string): Promise<Recall | undefined> {
+  const t = sig(task), c = sig(context);
+  const scored = (await readRecipes(cache)).filter((r) => r.connector === connector && r.kind === kind)
+    .map((r) => ({ r, s: jaccard(r.taskWords, t), cs: jaccard(r.contextWords, c) })).filter((x) => x.s >= 0.6 && x.cs >= 0.3).sort((a, b) => b.s + b.cs - (a.s + a.cs));
+  const hit = scored[0];
+  if (!hit) return undefined;
+  const eligible = hit.r.uses >= 2 && (hit.r.misses === 0 || rateOf(hit.r) >= 0.7);
+  return { recipe: hit.r, eligible, ...(eligible ? { composition: hit.r.composition, followUps: recipeFollowUps(hit.r) } : {}) };
+}
+/** Store or update the recipe after a card ran: a Jev decision (re)learns it; a memory reuse bumps its uses. */
+async function rememberRecipe(cache: DiskCache, p: { connector: string; kind: CardKind; task: string; context: string; by: string; composition?: Record<string, unknown>; followUps: string[]; covers: Record<string, string[]>; recall?: Recall }): Promise<string | undefined> {
+  if (p.by === "fallback") return p.recall?.recipe.id;
+  const all = await readRecipes(cache);
+  const now = new Date().toISOString();
+  const shape = p.composition ? Object.fromEntries(Object.entries(p.composition).filter(([k]) => !["by", "confidence", "variant", "followUps"].includes(k))) : undefined;
+  let r = p.recall ? all.find((x) => x.id === p.recall!.recipe.id) : undefined;
+  if (r) r.covers = { ...(r.covers ?? {}), ...p.covers };
+  if (r && p.by === "memory") { r.uses++; r.lastAt = now; }
+  else if (r) {
+    // Jev decided again (the recipe was young or its record was poor): take the new decision, keep what the person used.
+    const relearn = r.uses >= 2;
+    r.composition = shape ?? r.composition; r.uses++; r.lastAt = now;
+    if (relearn) { r.successes = 0; r.misses = 0; }
+    for (const id of p.followUps) r.followUpUses[id] = Math.max(r.followUpUses[id] ?? 0, 1);
+    if (!r.examples.includes(p.task)) r.examples = [...r.examples, p.task].slice(-5);
+    r.taskWords = [...new Set([...r.taskWords, ...sig(p.task)])].sort(); r.contextWords = [...new Set([...r.contextWords, ...sig(p.context)])].sort();
+  } else {
+    r = { id: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, connector: p.connector, kind: p.kind, taskWords: sig(p.task), contextWords: sig(p.context), examples: [p.task], composition: shape, followUpUses: Object.fromEntries(p.followUps.map((id) => [id, 1])), covers: p.covers, uses: 1, successes: 0, misses: 0, lastAt: now };
+    all.push(r);
+  }
+  await cache.write("recipes", all.slice(-500));
+  return r.id;
+}
+/** The person's next move on a card: covered by what it offered (success) or not (miss, and the recipe learns the control). */
+async function scoreRecipe(cache: DiskCache, id: string, offered: string[], used: string[]): Promise<string[]> {
+  const all = await readRecipes(cache);
+  const r = all.find((x) => x.id === id);
+  if (!r) return used;
+  const covers = r.covers ?? {};
+  // A move ("priority") is covered by an offered control whose id matches or whose `covers` lists it ("edit").
+  const controlFor = (u: string) => offered.find((o) => o === u || (covers[o] ?? []).includes(u)) ?? Object.keys(covers).find((c) => c === u || (covers[c] ?? []).includes(u)) ?? u;
+  const moves = used.filter((u) => u !== "create" && u !== "delete").map(controlFor);
+  const missing = moves.filter((m) => !offered.includes(m));
+  if (moves.length) { if (missing.length) r.misses++; else r.successes++; }
+  for (const m of moves) r.followUpUses[m] = (r.followUpUses[m] ?? 0) + 1;
+  await cache.write("recipes", all.slice(-500));
+  return [...new Set([...moves, ...used.filter((u) => u === "create" || u === "delete")])];
 }
 
 /* ---------- follow-ups: the few actions the card offers beside its primary surface ---------- */
@@ -106,8 +186,10 @@ async function noteUsed(cache: DiskCache, connector: string, used: string[]) {
  * surface plus the follow-ups Jev judged likely from the ask, the conversation context, and what
  * the person did after similar asks; everything else waits behind "More" (one local click).
  */
-export type FollowUp = { id: string; label: string; when: string; unless?: string; guess: boolean; always?: boolean };
-export type FollowUpPick = { actions: string[]; by: "jev" | "fallback"; probabilities?: Record<string, number> };
+export type FollowUp = { id: string; label: string; when: string; unless?: string; guess: boolean; always?: boolean;
+  /** The move ids (as `apply` reports them in `used`) this control covers, when they differ from its id: a list's `edit` covers priority, status, assignee…. */
+  covers?: string[] };
+export type FollowUpPick = { actions: string[]; by: "jev" | "fallback" | "memory"; probabilities?: Record<string, number> };
 export const MAX_FOLLOW_UPS = 3;
 
 export async function pickFollowUps(jev: Decide, purpose: string, state: object, candidates: FollowUp[], usage: string, context: string): Promise<FollowUpPick & { took: string }> {
@@ -141,6 +223,8 @@ export type CardResult = {
   offered?: string[];
   /** For apply: which follow-ups the message exercised ("priority", "comment"), by the connector's own reading. */
   used?: string[];
+  /** The composition that was drawn (views), so the runtime can remember it for similar asks. Its `by` says who decided. */
+  remember?: Record<string, unknown> & { by?: string };
 };
 
 export type Run = {
@@ -157,9 +241,15 @@ export type Run = {
   history: string[];
   /** What the agent knows around the ask: the conversation's thread, a memory that bears on it. Empty in a fresh chat. */
   context: string;
-  /** Picks the follow-ups for a card: runs beside the composition classify, same Jev budget. */
+  /** Picks the follow-ups for a card: runs beside the composition classify, same Jev budget. Answers from memory when a proven recipe matches. */
   followUps: (purpose: string, state: object, candidates: FollowUp[]) => Promise<FollowUpPick & { took: string }>;
+  /** A proven recipe for asks like this one, when there is one: use `remembered(recall, () => jev(...))` instead of asking Jev. */
+  recall?: Recall;
 };
+
+/** The remembered composition when a proven recipe matches, else the decision passed in. */
+export const remembered = <T>(recall: Recall | undefined, decide: () => Promise<{ value: T; took: string; by: string }>): Promise<{ value: T; took: string; by: string }> =>
+  recall?.composition ? Promise.resolve({ value: { ...(recall.composition as object), by: "memory" } as T, took: "0 ms", by: "memory" }) : decide();
 
 export type Connector = {
   /** Short id used in `connector` arguments, payloads and the UI registry: "linear", "gcal". */
@@ -291,7 +381,7 @@ export function registerCards(api: any, connectors: Connector[]) {
         };
         const picked = await pickConnector(connectors, tool.kind, params ?? {}, jev);
         if ("error" in picked) return text(`Could not ${tool.failing}: ${picked.error}`, { kind: "error", error: picked.error });
-        const { connector, by } = picked;
+        const { connector, by: by0 } = picked;
         if (!ctx?.auth?.resolveToken) return text(`Could not ${tool.failing}: sign-in is not available in this context.`, { kind: "error", connector: connector.id, error: "No sign-in available." });
         const auth = await ctx.auth.resolveToken({ serviceId: connector.auth.serviceId, schemeId: connector.auth.schemeId, ...(connector.auth.requiredScopes ? { requiredScopes: connector.auth.requiredScopes } : {}), ...(connector.auth.connectServiceId ? { connectServiceId: connector.auth.connectServiceId } : {}), ...(typeof params?.account === "string" && params.account ? { accountId: params.account } : {}) });
         if (!auth?.ok) { const why = auth?.message ?? `${connector.label} is not connected. Connect it in App Store → Installed.`; return text(`Could not ${tool.failing}: ${why}`, { kind: "error", connector: connector.id, error: why }); }
@@ -301,14 +391,20 @@ export function registerCards(api: any, connectors: Connector[]) {
           const history = tool.kind !== "apply" ? await historyFor(root, connector.id, tool.kind, task) : [];
           const context = typeof params?.context === "string" ? params.context.trim().slice(0, 400) : "";
           const usage = tool.kind !== "apply" ? await usageFor(root, connector.id) : "";
-          const followUps = (purpose: string, state: object, candidates: FollowUp[]) => pickFollowUps(jev, purpose, state, candidates, usage, context);
-          const { summary, payload, picked, correction, offered, used } = await connector[tool.kind]({ connector, token: auth.auth.accessToken, account: auth.auth.account, params: params ?? {}, signal, startedAt, jev, cache: diskCache(ctx?.paths?.dataDir ? `${ctx.paths.dataDir}/${connector.id}` : undefined), history, context, followUps });
-          if (picked) await logPick(root, { at: new Date().toISOString(), connector: connector.id, kind: tool.kind, task, picked, ...(context ? { context } : {}), ...(offered?.length ? { offered } : {}) });
+          const recall = tool.kind !== "apply" ? await recallRecipe(root, connector.id, tool.kind, task, context) : undefined;
+          let covers: Record<string, string[]> = {};
+          const followUps = (purpose: string, state: object, candidates: FollowUp[]) => (covers = Object.fromEntries(candidates.map((c) => [c.id, c.covers ?? []])), recall?.followUps)
+            ? Promise.resolve({ actions: [...new Set([...candidates.filter((c) => c.always).map((c) => c.id), ...recall.followUps!])], by: "memory" as const, took: "0 ms" })
+            : pickFollowUps(jev, purpose, { ...state, similarAsksSolvedBefore: recall ? `${recall.recipe.uses} time(s), ${recall.recipe.successes} covered the next move, ${recall.recipe.misses} did not; offered ${recipeFollowUps(recall.recipe).join(", ") || "nothing"}` : "none" }, candidates, usage, context);
+          const { summary, payload, picked, correction, offered, used, remember } = await connector[tool.kind]({ connector, token: auth.auth.accessToken, account: auth.auth.account, params: params ?? {}, signal, startedAt, jev, cache: diskCache(ctx?.paths?.dataDir ? `${ctx.paths.dataDir}/${connector.id}` : undefined), history, context, followUps, recall });
+          const by = String(remember?.by ?? (recall?.eligible ? "memory" : offered ? "jev" : "fallback"));
+          const recipeId = tool.kind !== "apply" ? await rememberRecipe(root, { connector: connector.id, kind: tool.kind, task, context, by, composition: remember, followUps: offered ?? [], covers, recall }) : undefined;
+          if (picked) await logPick(root, { at: new Date().toISOString(), connector: connector.id, kind: tool.kind, task, picked, by, ...(context ? { context } : {}), ...(offered?.length ? { offered } : {}), ...(recipeId ? { recipe: recipeId } : {}) });
           if (used?.length) await noteUsed(root, connector.id, used);
           if (correction) { const all = await readPicks(root); const last = [...all].reverse().find((p) => p.connector === connector.id && p.kind === "draft"); if (last) { last.correction = correction; await root.write("picks", all.slice(-300)); } }
           const timing = { ...((payload.timing as object) ?? {}), total: ms(startedAt) };
           // The agent sees one terse line; routing, picks and timings ride in `details.debug` for the card and the evals.
-          return text(summary, { ...payload, connector: connector.id, connectorLabel: connector.label, timing, debug: { routedBy: by, picked: picked ?? null, timing }, ...(history.length ? { history } : {}) });
+          return text(summary, { ...payload, connector: connector.id, connectorLabel: connector.label, timing, debug: { routedBy: by0, decidedBy: by, picked: picked ?? null, timing }, ...(history.length ? { history } : {}) });
         } catch (err) {
           const e = err as Error;
           const why = connector.explain?.(err) ?? (e?.name === "AbortError" ? "The call was cancelled." : e?.message ?? String(err));

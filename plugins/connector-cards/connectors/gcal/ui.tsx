@@ -6,7 +6,7 @@
  * (saveLine, createMessage, rsvp, delete) and the parser in step.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ClockGlyph, ErrorCard, LongText, NotesGlyph, OpenExternal, PinGlyph, Picker, Placeholder, SaveBar, Timing, UserGlyph, VideoGlyph, bare, card, footer, hoverable, muted, pad, row, v, type ConnectorUi, type UiCtx, MoreChip, useFollowUps } from "../../ui/kit.tsx";
+import { Button, ClockGlyph, ErrorCard, LongText, NotesGlyph, OpenExternal, PinGlyph, Picker, Placeholder, SaveBar, Timing, UserGlyph, VideoGlyph, bare, card, footer, hoverable, muted, pad, row, v, type ConnectorUi, type UiCtx, useFollowUps } from "../../ui/kit.tsx";
 
 type Attendee = { email: string; name?: string; response: string; self?: boolean; organizer?: boolean; optional?: boolean };
 type Event = { key: string; id: string; calendar: string; calendarName: string; title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees: Attendee[]; organizer?: string; meet?: string; link?: string; myResponse?: string; color?: string; recurring?: boolean };
@@ -70,7 +70,7 @@ function EventCard({ ctx, event: given, note, followUps: givenFu }: { ctx: UiCtx
   const tz: string = ctx.details?.timeZone ?? "UTC";
   const event: Event | undefined = given ?? ctx.details?.event;
   const offered: string[] | undefined = givenFu ?? (Array.isArray(ctx.details?.followUps) ? ctx.details.followUps : Array.isArray(ctx.details?.composition?.followUps) ? ctx.details.composition.followUps : undefined);
-  const fu = useFollowUps(offered, event);
+  const fu = useFollowUps(offered);
   const seed = useMemo<Edit>(() => ({ title: event?.title ?? "", start: wallOf(event?.start, tz), end: wallOf(event?.end, tz), location: event?.location ?? "", guests: (event?.attendees ?? []).map(a => a.email).join(", ") }), [event]);
   const [saved, setSaved] = useState<Edit>(seed);
   const [cur, setCur] = useState<Edit>(seed);
@@ -101,7 +101,6 @@ function EventCard({ ctx, event: given, note, followUps: givenFu }: { ctx: UiCtx
         <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <span style={{ marginTop: 5 }}><Dot color={event.color} /></span>
           {edDetails ? <input style={{ ...bare, fontSize: 17, fontWeight: 500 }} value={cur.title} onChange={e => setCur({ ...cur, title: e.target.value })} aria-label="Title" /> : <h2 onClick={fu.has("details") ? open : undefined} title={fu.has("details") ? "Click to edit" : undefined} style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 500, lineHeight: 1.3, cursor: fu.has("details") ? "text" : "default" }}>{event.title}</h2>}
-          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
           {event.link ? <OpenExternal url={event.link} title="Open in Google Calendar" onOpen={ctx.openUrl} /> : null}
         </div>
         <Line glyph={<ClockGlyph />}>
@@ -382,7 +381,7 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const [monthIx, setMonthIx] = useState(comp.range === "next_month" ? 1 : 0);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const fu = useFollowUps(comp.followUps, d);
+  const fu = useFollowUps(comp.followUps);
   useEffect(() => { setRange(initialRange); setMode(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda"); setMonthIx(comp.range === "next_month" ? 1 : 0); setOpenKey(null); setCreating(false); }, [d]);
   const writable: Cal[] = (Array.isArray(d.calendars) ? d.calendars : []).filter((c: Cal) => c.writable);
   const nextSlot = (() => { const t = new Date(Math.ceil((Date.now() + 5 * 60e3) / (30 * 60e3)) * 30 * 60e3); const w = (x: Date) => wallOf(x.toISOString(), tz); return { start: w(t), end: w(new Date(t.getTime() + 30 * 60e3)) }; })();
@@ -390,14 +389,12 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const t0 = d.timing as Record<string, string> | undefined;
   const caption = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : "");
   const fields = comp.fields;
-  const anyChip = fu.has("ranges") || fu.has("find") || fu.has("create") || fu.gated;
+  const anyChip = fu.has("ranges") || fu.has("find") || fu.has("create");
   const chips = anyChip ? (
     <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
       {fu.has("ranges") ? CHIPS.map(([k, label]) => <Tab key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : (mode === "agenda" && range === k))} onClick={() => { setOpenKey(null); if (k === "this_month") { setMode("month"); setMonthIx(0); } else { setMode("agenda"); setRange(k); } }}>{label}</Tab>) : null}
       {fu.has("find") ? <Tab on={mode === "free"} onClick={() => { setOpenKey(null); setMode("free"); }}>Find a time</Tab> : null}
       {fu.has("create") && writable.length && mode !== "free" ? <Tab on={creating} onClick={() => setCreating(c => !c)}>+ New event</Tab> : null}
-      <span style={{ flex: 1 }} />
-      {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
     </div>
   ) : null;
   if (mode === "free") {
@@ -456,7 +453,7 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
 /* ---------- NewEventCard: Google Calendar's create dialog ---------- */
 function NewEventCard({ ctx, onBack, backLabel }: { ctx: UiCtx; onBack?: () => void; backLabel?: string }) {
   const draft: Draft | undefined = ctx.details?.draft;
-  const fu = useFollowUps(draft?.followUps, draft);
+  const fu = useFollowUps(draft?.followUps);
   const calendars: Cal[] = Array.isArray(ctx.details?.calendars) ? ctx.details.calendars : [];
   const seed = useMemo(() => ({ title: draft?.title ?? "", start: draft?.start ?? "", end: draft?.end ?? "", allDay: Boolean(draft?.allDay), guests: (draft?.attendees ?? []).join(", "), location: draft?.location ?? "", meet: Boolean(draft?.meet), notes: draft?.description ?? "", calendar: calendars.find(c => c.id === draft?.calendar) ?? calendars.find(c => c.primary) ?? calendars[0] }), [draft]);
   const [s, setS] = useState(seed);
@@ -470,10 +467,7 @@ function NewEventCard({ ctx, onBack, backLabel }: { ctx: UiCtx; onBack?: () => v
   return (
     <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>{backLabel ?? "‹ Find a time"}</button> : <span />}
-          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
-        </div>
+        {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>{backLabel ?? "‹ Find a time"}</button> : null}
         <input style={{ ...bare, fontSize: 18, fontWeight: 500, borderBottom: `1px solid ${v("border")}`, paddingBottom: 6 }} value={s.title} onChange={e => set({ title: e.target.value })} placeholder="Add title" aria-label="Title" disabled={sent} />
         <Line glyph={<ClockGlyph />}>
           <div style={{ ...row, gap: 6 }}>

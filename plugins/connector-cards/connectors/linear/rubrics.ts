@@ -12,7 +12,7 @@ import { inScope } from "./read.ts";
 export type Composition = {
   view: "issue" | "list" | "board" | "project"; groupBy: "status" | "project" | "assignee" | "priority"; sort: "priority" | "newest" | "none";
   scope: Scope; fields: { description: boolean; labels: boolean; dates: boolean; assignee: boolean; project: boolean };
-  by: "jev" | "fallback"; confidence?: number; variant?: string;
+  by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string;
   /** The follow-ups the card offers beside its primary surface (ids from issueFollowUps / listFollowUps / draftFollowUps). */
   followUps?: string[];
 };
@@ -36,7 +36,7 @@ export function listFollowUps(task: string, comp: Composition, n: number): Follo
   const w = t(task);
   const triage = /\b(triage|plan|priorit|what should|next|groom|backlog|review)\w*/.test(w);
   return [
-    { id: "edit", label: "change priority or status directly on the rows", when: "The person is triaging, planning, reviewing what to do next, or will act on several issues: inline pickers save a message per change.", unless: "They only want to look (a status check, an overview, a standup read-out).", guess: triage },
+    { id: "edit", label: "change priority or status directly on the rows", when: "The person is triaging, planning, reviewing what to do next, or will act on several issues: inline pickers save a message per change.", unless: "They only want to look (a status check, an overview, a standup read-out).", guess: triage, covers: ["priority", "status", "assignee", "labels", "project"] },
     { id: "scopes", label: "switch between open, in progress, done and all", when: "The ask mixes states or is about catching up, progress, or what shipped; or the person often flips scope after asks like this.", guess: /\b(progress|done|shipped|stand|overview|catch)\w*/.test(w) || comp.scope === "all" },
     { id: "views", label: "switch between list, board and project views", when: "The ask is about an overview or a project and the other shape would also answer it; or they switched views after similar asks.", guess: comp.view !== "list" },
     { id: "group", label: "regroup the board by status, project, assignee or priority", when: "The board is about ownership, workload, urgency or cross-project progress, where another grouping is a natural next look.", unless: "The view is a plain list, or one grouping plainly answers the ask.", guess: comp.view === "board" && comp.groupBy !== "status" },
@@ -135,7 +135,7 @@ export function settle(comp: Composition, all: Issue[]): { comp: Composition; is
 }
 
 /* ---------- the create rubric ---------- */
-export type Picks = { state?: string; priority: number; project?: string; labels: string[]; assignee?: string; by: "jev" | "fallback"; confidence?: number; variant?: string };
+export type Picks = { state?: string; priority: number; project?: string; labels: string[]; assignee?: string; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string };
 
 export function createRubric(task: string, title: string, description: string, meta: TeamMeta) {
   const defaultState = meta.states.find((s) => s.type === "unstarted") ?? meta.states.find((s) => s.type === "backlog") ?? meta.states[0];

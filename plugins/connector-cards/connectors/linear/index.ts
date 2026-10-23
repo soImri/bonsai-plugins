@@ -8,7 +8,7 @@
  *
  * Reads and writes both go to Linear's MCP server with Bonsai's Linear sign-in.
  */
-import { HttpError, defineConnector, classify, ms, type Run, type CardResult } from "../../runtime.ts";
+import { HttpError, defineConnector, classify, ms, remembered, type Run, type CardResult } from "../../runtime.ts";
 import { ISSUE_FIELDS, PRIORITY_NAMES, normalizeIssue, optionsOf, readIssues, teamContext, type Issue } from "./read.ts";
 import { createRubric, deriveTitle, draftFollowUps, issueFollowUps, listFollowUps, settle, viewRubric, type Composition, type Picks } from "./rubrics.ts";
 import { applyChange, createIssue, describeChange, parseCardMessage, postComment, type Change, type Comment, type Create } from "./write.ts";
@@ -36,7 +36,7 @@ export const linear = defineConnector({
   filters: { project: "project name", assignee: "'me' or a display name", team: "team key or name" },
   explain: (err) => (err instanceof HttpError && (err.status === 401 || err.status === 403) ? `Linear's MCP server rejected Bonsai's Linear token (HTTP ${err.status}). Reconnect Linear (App Store → Installed → Linear → Connections) and try again.` : undefined),
 
-  async view({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
+  async view({ token, params, signal, startedAt, jev, cache, history, followUps, recall }: Run): Promise<CardResult> {
     const f = params.filters ?? {};
     const identifiers: string[] = (params.refs ?? []).filter((r: string) => ID.test(r));
     const { team, meta } = await teamContext(token, f.team, `${params.task} ${identifiers.join(" ")}`, cache, signal);
@@ -48,7 +48,7 @@ export const linear = defineConnector({
     const guessed = settle({ ...rubric.guess }, all.slice());
     const candidates = guessed.comp.view === "issue" && guessed.issues.length === 1 ? issueFollowUps(params.task, guessed.issues[0]) : listFollowUps(params.task, guessed.comp, all.length);
     const [{ value, took: tJev }, fu] = await Promise.all([
-      jev({ purpose: "linear-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess),
+      remembered(recall, () => jev({ purpose: "linear-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess)),
       followUps("linear-follow-ups", { task: params.task, shape: guessed.comp.view, issueCount: all.length, sample: rubric.state.sample.slice(0, 4) }, candidates),
     ]);
     const { comp, issues } = settle(value as Composition, all);
@@ -59,8 +59,8 @@ export const linear = defineConnector({
     const payload = { kind: "view", task: params.task, team: team.key, issues, allIssues: all, options: optionsOf(meta), projects: meta.projects.map((p) => ({ name: p.name, ...(p.lead ? { lead: p.lead } : {}), ...(p.targetDate ? { targetDate: p.targetDate } : {}), ...(p.summary ? { description: p.summary } : {}) })), ...(project ? { project: { name: project.name, ...(project.lead ? { lead: project.lead } : {}), ...(project.targetDate ? { targetDate: project.targetDate } : {}), ...(project.summary ? { description: project.summary } : {}) } } : {}), composition: comp, timing: { linear: tLinear, jev: tJev } };
     const picked = `${comp.view} view, scope ${comp.scope}${how}, sorted by ${comp.sort}`;
     void who;
-    if (!issues.length) return { summary: `No ${comp.scope === "all" ? "" : `${comp.scope} `}issues in ${team.key} match. Say so in five words or fewer.`, payload, picked, offered: fu.actions };
-    return { summary: `Card shown (${issues.length} ${team.key} issue${issues.length === 1 ? "" : "s"}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions };
+    if (!issues.length) return { summary: `No ${comp.scope === "all" ? "" : `${comp.scope} `}issues in ${team.key} match. Say so in five words or fewer.`, payload, picked, offered: fu.actions, remember: comp };
+    return { summary: `Card shown (${issues.length} ${team.key} issue${issues.length === 1 ? "" : "s"}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions, remember: comp };
   },
 
   async record({ token, params, signal, startedAt, cache, followUps, context }: Run): Promise<CardResult> {
@@ -73,7 +73,7 @@ export const linear = defineConnector({
     const full = { ...issue, options: optionsOf(meta), ...(params.draft ? { commentDraft: params.draft } : {}) };
     const task = `${ref}${context ? ` (${context})` : ""}`;
     const fu = await followUps("linear-follow-ups", { task: ref, issue: { title: issue.title, state: issue.state.name, priority: issue.priority, assignee: issue.assignee ?? "none", labels: issue.labels.join(", ") || "none", project: issue.project ?? "none" } }, issueFollowUps(task, full));
-    return { summary: `Card shown (${issue.identifier}). Reply with nothing.`, payload: { kind: "issue", issue: full, followUps: fu.actions, timing: { linear: tLinear, jev: fu.took } }, picked: `issue${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions };
+    return { summary: `Card shown (${issue.identifier}). Reply with nothing.`, payload: { kind: "issue", issue: full, followUps: fu.actions, timing: { linear: tLinear, jev: fu.took } }, picked: `issue${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions, remember: { by: fu.by } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
@@ -93,7 +93,7 @@ export const linear = defineConnector({
     return {
       summary: `Create dialog shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Create in ${team.key}:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft, picks: { by: picks.by, confidence: picks.confidence }, timing: { linear: tLinear, jev: tJev } },
-      picked: summary, offered: fu.actions,
+      picked: summary, offered: fu.actions, remember: { by: fu.by },
     };
   },
 

@@ -6,7 +6,7 @@
  *   draft   words (+ title) → the app's create dialog with Jev-picked properties
  *   apply   the card's Save / Create → written, card redrawn from the app's truth
  */
-import { HttpError, defineConnector, classify, ms, type Run, type CardResult } from "../../runtime.ts";
+import { HttpError, defineConnector, classify, ms, remembered, type Run, type CardResult } from "../../runtime.ts";
 import { getRecord, listRecords, type Record } from "./api.ts";
 import { listFollowUps, recordFollowUps, viewRubric, type Composition } from "./rubrics.ts";
 import { parseCardMessage } from "./write.ts";
@@ -34,22 +34,22 @@ export const __ID__ = defineConnector({
   filters: {},
   explain: (err) => (err instanceof HttpError && (err.status === 401 || err.status === 403) ? `__LABEL__ rejected Bonsai's sign-in (HTTP ${err.status}). Reconnect it in App Store → Installed.` : undefined),
 
-  async view({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
+  async view({ token, params, signal, startedAt, jev, cache, history, followUps, recall }: Run): Promise<CardResult> {
     const records = await listRecords(token, cache, { query: params.query, ...(params.filters ?? {}) }, signal);
     const tApp = ms(startedAt);
     const rubric = viewRubric(params.task ?? "", records);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
-    // Composition and follow-ups: two Jev calls in parallel (same wall time).
+    // Composition and follow-ups: two Jev calls in parallel (same wall time). A proven recipe for a similar ask answers both from memory.
     const [{ value, took: tJev }, fu] = await Promise.all([
-      jev({ purpose: "__ID__-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess),
+      remembered(recall, () => jev({ purpose: "__ID__-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess)),
       followUps("__ID__-follow-ups", { task: params.task, recordCount: records.length }, records.length === 1 ? recordFollowUps(params.task ?? "") : listFollowUps(params.task ?? "")),
     ]);
     const comp = value as Composition;
     comp.followUps = fu.actions;
     const payload = { kind: "view", task: params.task, records, composition: comp, timing: { __ID__: tApp, jev: tJev } };
     const picked = `${comp.view} view`;
-    if (!records.length) return { summary: "No records match. Say so in one line.", payload, picked, offered: fu.actions };
-    return { summary: `Showing ${records.length} __LABEL__ record(s) as a ${comp.view} view (${comp.by === "jev" ? `Jev picked, ${comp.variant}` : "default pick"}; __LABEL__ ${tApp}, Jev ${tJev}). The card is the answer: reply with one short line or nothing.`, payload, picked, offered: fu.actions };
+    if (!records.length) return { summary: "No records match. Say so in one line.", payload, picked, offered: fu.actions, remember: comp };
+    return { summary: `Showing ${records.length} __LABEL__ record(s) as a ${comp.view} view (${comp.by === "jev" ? `Jev picked, ${comp.variant}` : "default pick"}; __LABEL__ ${tApp}, Jev ${tJev}). The card is the answer: reply with one short line or nothing.`, payload, picked, offered: fu.actions , remember: comp };
   },
 
   async record({ token, params, signal, startedAt, cache, followUps, context }: Run): Promise<CardResult> {

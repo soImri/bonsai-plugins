@@ -12,7 +12,7 @@ export type Range = "today" | "yesterday" | "3_days" | "week" | "2_weeks";
 export const RANGE_LABEL: Record<Range, string> = { today: "Today", yesterday: "Yesterday", "3_days": "Last 3 days", week: "This week", "2_weeks": "Last 2 weeks" };
 export const RANGE_DAYS: Record<Range, number> = { today: 0, yesterday: 1, "3_days": 3, week: 7, "2_weeks": 14 };
 
-export type Composition = { view: "inbox" | "channel" | "thread"; range: Range; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean; followUps?: string[] }; by: "jev" | "fallback"; confidence?: number; variant?: string };
+export type Composition = { view: "inbox" | "channel" | "thread"; range: Range; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean; followUps?: string[] }; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string };
 
 export function guessRange(task: string): Range {
   const t = task.toLowerCase();

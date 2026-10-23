@@ -25,17 +25,10 @@ function parse(raw) {
   }
 }
 var dayShort = (s) => s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
-function useFollowUps(offered, resetOn) {
-  const [more, setMore] = useState(false);
-  useEffect(() => {
-    setMore(false);
-  }, [resetOn]);
+function useFollowUps(offered) {
   const set = new Set(offered ?? []);
   const gated = Array.isArray(offered);
-  return { has: (id) => !gated || more || set.has(id), more, toggle: () => setMore((m) => !m), gated };
-}
-function MoreChip({ on, onClick, label }) {
-  return <button type="button" onClick={onClick} title={on ? "Fewer controls" : "More controls"} style={{ ...bare, width: "auto", padding: "2px 8px", borderRadius: 6, fontSize: 12, color: v("text-secondary"), cursor: "pointer", background: on ? v("bg-subtle") : "transparent" }}>{on ? "Less" : label ?? "More"}</button>;
+  return { has: (id) => !gated || set.has(id) };
 }
 function ErrorCard({ message }) {
   return <div style={{ ...card, ...pad, ...muted }}>{message}</div>;
@@ -203,7 +196,7 @@ function PriorityGlyph({ p }) {
 var ProjectGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M7 1.5l5 2.8v5.4L7 12.5 2 9.7V4.3z" /><path d="M2 4.3l5 2.8 5-2.8M7 7.1v5.4" /></svg>;
 var LabelGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 7.2V2.5h4.7L12 7.8 7.3 12.5z" strokeLinejoin="round" /><circle cx="5" cy="5.5" r="1" fill="currentColor" stroke="none" /></svg>;
 var TeamChip = ({ k }) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: v("text-primary") }}><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: v("success") }} />{k}</span>;
-function PropertyPills({ value, options, onChange, fields, can, trailing }) {
+function PropertyPills({ value, options, onChange, fields, can }) {
   const states = options?.states?.length ? options.states : DEFAULT_STATES;
   const f = fields ?? {};
   const show = (k) => f[k] !== false;
@@ -215,7 +208,6 @@ function PropertyPills({ value, options, onChange, fields, can, trailing }) {
       {show("assignee") && !skip("assignee", Boolean(value.assignee)) ? <Picker items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={(m) => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={(m) => m} labelOf={(m) => m} readOnly={ro("assignee")} /> : null}
       {show("project") && !skip("project", Boolean(value.project)) ? <Picker items={options?.projects ?? (value.project ? [value.project] : [])} value={value.project} onPick={(p) => onChange({ ...value, project: p })} label="Project" lead={() => <ProjectGlyph />} keyOf={(p) => p} labelOf={(p) => p} readOnly={ro("project")} /> : null}
       {show("labels") && !skip("labels", value.labels.length > 0) ? <Picker items={options?.labels ?? value.labels} value={value.labels} multi onPick={(l) => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter((x) => x !== l) : [...value.labels, l] })} label="Labels" lead={() => <LabelGlyph />} keyOf={(l) => l} labelOf={(l) => l} readOnly={ro("labels")} /> : null}
-      {trailing}
     </div>;
 }
 function CommentComposer({ identifier, draft, send }) {
@@ -266,7 +258,7 @@ function IssueCard({ ctx, note }) {
     }
   }, [initial]);
   const offered = followUpsOf(ctx.details, issue);
-  const fu = useFollowUps(offered, issue);
+  const fu = useFollowUps(offered);
   if (!issue?.title) return <Placeholder text="No issue data." />;
   const changes = diff(saved, cur);
   dirty.current = changes.length > 0;
@@ -285,7 +277,7 @@ function IssueCard({ ctx, note }) {
         </div>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
         {issue.description ? <LongText md={issue.description} /> : null}
-        <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}><PropertyPills value={cur} options={issue.options} onChange={setCur} can={fu.has} trailing={fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null} /></div>
+        <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}><PropertyPills value={cur} options={issue.options} onChange={setCur} can={fu.has} /></div>
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {dayShort(issue.createdAt)}{issue.completedAt ? ` \xB7 Done ${dayShort(issue.completedAt)}` : ""}</div> : null}
         {fu.has("comment") ? <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} /> : null}
       </div>
@@ -308,7 +300,7 @@ function NewIssueCard({ ctx }) {
       setProps(seed);
     }
   }, [seed]);
-  const fu = useFollowUps(draft?.followUps, draft);
+  const fu = useFollowUps(draft?.followUps);
   if (!draft?.team) return <Placeholder text="No draft data." />;
   async function create() {
     setSent(true);
@@ -329,7 +321,7 @@ function NewIssueCard({ ctx }) {
         <div style={{ pointerEvents: sent ? "none" : "auto", opacity: sent ? 0.7 : 1 }}><PropertyPills value={props} options={draft.options} onChange={(p) => {
     touched.current = true;
     setProps(p);
-  }} can={can} trailing={fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null} /></div>
+  }} can={can} /></div>
       </div>
       <div style={footer}>
         <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear\u2026" : ""}</span>
@@ -367,7 +359,7 @@ function ComposedView({ ctx, note }) {
   const [groupBy, setGroupBy] = useState2(jevComp.groupBy ?? "status");
   const [openId, setOpenId] = useState2(null);
   const [creating, setCreating] = useState2(false);
-  const fu = useFollowUps(jevComp.followUps, jevComp);
+  const fu = useFollowUps(jevComp.followUps);
   useEffect2(() => {
     setView(jevComp.view);
     setScope(jevComp.scope ?? "open");
@@ -427,9 +419,9 @@ function ComposedView({ ctx, note }) {
   const inProgress = projIssues.filter((i) => stateOf(i).type === "started").length;
   const row_ = (i) => <div key={i.identifier}>
       <IssueRow issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={(p) => setCur((c) => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} editable={fu.has("edit")} />
-      {openId === i.identifier ? <div style={{ margin: "2px 0 8px 30px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: { ...i, options: i.options ?? options, followUps: fu.more ? void 0 : ["status", "priority", "comment"] } } }} /></div> : null}
+      {openId === i.identifier ? <div style={{ margin: "2px 0 8px 30px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: { ...i, options: i.options ?? options, followUps: ["status", "priority", "comment"] } } }} /></div> : null}
     </div>;
-  const anySwitch = fu.has("views") || fu.has("group") || fu.has("scopes") || fu.has("create") || fu.gated;
+  const anySwitch = fu.has("views") || fu.has("group") || fu.has("scopes") || fu.has("create");
   const switcher = anySwitch ? <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
       <span style={{ display: "inline-flex", gap: 2, alignItems: "center" }}>
         {fu.has("views") ? <>
@@ -442,7 +434,6 @@ function ComposedView({ ctx, note }) {
       </span>
       <span style={{ display: "inline-flex", gap: 2, alignItems: "center" }}>
         {fu.has("scopes") ? ["open", "active", "done", "all"].map((sc) => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>) : null}
-        {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
       </span>
     </div> : null;
   const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options, followUps: ["priority", "project"] } } }} /> : null;
@@ -533,7 +524,7 @@ function EventCard({ ctx, event: given, note, followUps: givenFu }) {
   const tz = ctx.details?.timeZone ?? "UTC";
   const event = given ?? ctx.details?.event;
   const offered = givenFu ?? (Array.isArray(ctx.details?.followUps) ? ctx.details.followUps : Array.isArray(ctx.details?.composition?.followUps) ? ctx.details.composition.followUps : void 0);
-  const fu = useFollowUps(offered, event);
+  const fu = useFollowUps(offered);
   const seed = useMemo2(() => ({ title: event?.title ?? "", start: wallOf(event?.start, tz), end: wallOf(event?.end, tz), location: event?.location ?? "", guests: (event?.attendees ?? []).map((a) => a.email).join(", ") }), [event]);
   const [saved, setSaved] = useState3(seed);
   const [cur, setCur] = useState3(seed);
@@ -583,7 +574,6 @@ function EventCard({ ctx, event: given, note, followUps: givenFu }) {
         <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <span style={{ marginTop: 5 }}><Dot color={event.color} /></span>
           {edDetails ? <input style={{ ...bare, fontSize: 17, fontWeight: 500 }} value={cur.title} onChange={(e) => setCur({ ...cur, title: e.target.value })} aria-label="Title" /> : <h2 onClick={fu.has("details") ? open : void 0} title={fu.has("details") ? "Click to edit" : void 0} style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 500, lineHeight: 1.3, cursor: fu.has("details") ? "text" : "default" }}>{event.title}</h2>}
-          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
           {event.link ? <OpenExternal url={event.link} title="Open in Google Calendar" onOpen={ctx.openUrl} /> : null}
         </div>
         <Line glyph={<ClockGlyph />}>
@@ -900,7 +890,7 @@ function Agenda({ ctx, note }) {
   const [monthIx, setMonthIx] = useState3(comp.range === "next_month" ? 1 : 0);
   const [openKey, setOpenKey] = useState3(null);
   const [creating, setCreating] = useState3(false);
-  const fu = useFollowUps(comp.followUps, d);
+  const fu = useFollowUps(comp.followUps);
   useEffect3(() => {
     setRange(initialRange);
     setMode(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda");
@@ -918,7 +908,7 @@ function Agenda({ ctx, note }) {
   const t0 = d.timing;
   const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : "");
   const fields = comp.fields;
-  const anyChip = fu.has("ranges") || fu.has("find") || fu.has("create") || fu.gated;
+  const anyChip = fu.has("ranges") || fu.has("find") || fu.has("create");
   const chips = anyChip ? <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
       {fu.has("ranges") ? CHIPS.map(([k, label2]) => <Tab2 key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : mode === "agenda" && range === k)} onClick={() => {
     setOpenKey(null);
@@ -935,8 +925,6 @@ function Agenda({ ctx, note }) {
     setMode("free");
   }}>Find a time</Tab2> : null}
       {fu.has("create") && writable.length && mode !== "free" ? <Tab2 on={creating} onClick={() => setCreating((c) => !c)}>+ New event</Tab2> : null}
-      <span style={{ flex: 1 }} />
-      {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
     </div> : null;
   if (mode === "free") {
     const free = d.free ?? freeFromEvents(all, tz, now, 30);
@@ -989,7 +977,7 @@ function Agenda({ ctx, note }) {
 }
 function NewEventCard({ ctx, onBack, backLabel }) {
   const draft = ctx.details?.draft;
-  const fu = useFollowUps(draft?.followUps, draft);
+  const fu = useFollowUps(draft?.followUps);
   const calendars = Array.isArray(ctx.details?.calendars) ? ctx.details.calendars : [];
   const seed = useMemo2(() => ({ title: draft?.title ?? "", start: draft?.start ?? "", end: draft?.end ?? "", allDay: Boolean(draft?.allDay), guests: (draft?.attendees ?? []).join(", "), location: draft?.location ?? "", meet: Boolean(draft?.meet), notes: draft?.description ?? "", calendar: calendars.find((c) => c.id === draft?.calendar) ?? calendars.find((c) => c.primary) ?? calendars[0] }), [draft]);
   const [s, setS] = useState3(seed);
@@ -1011,10 +999,7 @@ function NewEventCard({ ctx, onBack, backLabel }) {
   }
   return <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>{backLabel ?? "\u2039 Find a time"}</button> : <span />}
-          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
-        </div>
+        {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>{backLabel ?? "\u2039 Find a time"}</button> : null}
         <input style={{ ...bare, fontSize: 18, fontWeight: 500, borderBottom: `1px solid ${v("border")}`, paddingBottom: 6 }} value={s.title} onChange={(e) => set({ title: e.target.value })} placeholder="Add title" aria-label="Title" disabled={sent} />
         <Line glyph={<ClockGlyph />}>
           <div style={{ ...row, gap: 6 }}>
@@ -1195,7 +1180,7 @@ function ChannelView({ ctx, note }) {
   const all = Array.isArray(d.messages) ? d.messages : [];
   const comp = d.composition ?? { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
   const isThread = d.view === "thread" && d.threadTs;
-  const fu = useFollowUps(comp.followUps, d);
+  const fu = useFollowUps(comp.followUps);
   if (!ch) return <Placeholder text="No conversation data." />;
   const { parents, repliesOf } = isThread ? { parents: all, repliesOf: /* @__PURE__ */ new Map() } : splitThreads(all);
   const days = /* @__PURE__ */ new Map();
@@ -1212,7 +1197,7 @@ function ChannelView({ ctx, note }) {
             <div style={{ fontSize: 15, fontWeight: 700 }}>{isThread ? "Thread" : convLabel(ch)}{isThread ? <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}> · {convLabel(ch)}</span> : null}{ch.kind === "private" ? <span style={{ ...muted, fontSize: 12 }}> 🔒</span> : null}</div>
             {!isThread && (ch.topic || ch.members) ? <div style={{ ...muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{[ch.members ? `${ch.members} members` : null, ch.topic].filter(Boolean).join(" \xB7 ")}</div> : null}
           </div>
-          <span style={{ ...muted, fontSize: 12, flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 6 }}>{caption}{fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}</span>
+          <span style={{ ...muted, fontSize: 12, flexShrink: 0 }}>{caption}</span>
         </div>
         {!parents.length ? <div style={{ ...muted, padding: "8px" }}>No messages in the last two weeks.</div> : null}
         {[...days.entries()].map(([k, items]) => <div key={k}>
@@ -1237,7 +1222,7 @@ function InboxView({ ctx, note }) {
   const [focus, setFocus] = useState4(comp.focus);
   const [range, setRange] = useState4(comp.range);
   const [openConv, setOpenConv] = useState4(null);
-  const fu = useFollowUps(comp.followUps, d);
+  const fu = useFollowUps(comp.followUps);
   useEffect4(() => {
     setFocus(comp.focus);
     setRange(comp.range);
@@ -1259,11 +1244,10 @@ function InboxView({ ctx, note }) {
           <span style={{ fontSize: 15, fontWeight: 700 }}>{title} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{msgs.length} messages</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
-        {fu.has("focus") || fu.has("ranges") || fu.gated ? <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
+        {fu.has("focus") || fu.has("ranges") ? <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
           {fu.has("focus") ? ["all", "mentions", "dms"].map((f) => <Tab3 key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>) : null}
           <span style={{ flex: 1 }} />
           {fu.has("ranges") ? ["today", "3_days", "week", "2_weeks"].map((r) => <Tab3 key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL2[r]}</Tab3>) : null}
-          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
         </div> : null}
         {!groups.length ? <div style={{ ...muted, padding: 8 }}>{focus === "mentions" ? "No mentions" : focus === "dms" ? "No direct messages" : "Nothing"} {(RANGE_LABEL2[range] ?? range).toLowerCase()}.</div> : null}
         {groups.map(([id, items]) => {

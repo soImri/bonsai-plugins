@@ -4,7 +4,7 @@
 
 **Why these screens:** TODO: the three to five screens people have muscle memory for. Sources: the app's own screens (browser pane), asks in `sessions://` about this app.
 
-| Screen in __LABEL__ | Composition | Primary surface | Follow-ups (Jev picks ≤3; More shows the rest) | A Save writes | Chat adaptation |
+| Screen in __LABEL__ | Composition | Primary surface | Follow-ups (≤3 picked per ask; the rest show as data) | A Save writes | Chat adaptation |
 | --- | --- | --- | --- | --- | --- |
 | TODO | `list` | the rows | `create` (when: planning, "add") | | |
 | TODO | `record` | title, body | `title` (when: renaming) | | |

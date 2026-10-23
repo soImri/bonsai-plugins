@@ -15,7 +15,7 @@
 
 **Jev picks (view):** range, focus, show threads, show reactions. **Jev picks (draft):** the conversation (up to 8 candidates).
 
-**Follow-ups (Jev picks up to three per card; `More` reveals the rest):**
+**Follow-ups (up to three per card, picked from the ask, the context and the recipe for similar asks; a property that is not picked shows as data):**
 
 | Screen | Primary surface | Follow-up candidates (`when`) |
 | --- | --- | --- |

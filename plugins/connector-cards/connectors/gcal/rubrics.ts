@@ -93,7 +93,7 @@ export function guessRange(task: string): Range {
 }
 
 /* ---------- the view rubric ---------- */
-export type Composition = { view: "agenda" | "event" | "month" | "free"; range: Range; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly: boolean }; by: "jev" | "fallback"; confidence?: number; variant?: string; followUps?: string[] };
+export type Composition = { view: "agenda" | "event" | "month" | "free"; range: Range; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly: boolean }; by: "jev" | "fallback" | "memory"; confidence?: number; variant?: string; followUps?: string[] };
 
 export function guessView(task: string, range: Range): Composition["view"] {
   if (/\b(free|available|availability|open slot|find (a )?time|when can|fit in|book a time)\b/i.test(task)) return "free";

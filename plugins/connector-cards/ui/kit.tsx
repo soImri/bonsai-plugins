@@ -41,16 +41,11 @@ export const hoverable = { onMouseEnter: (e: any) => (e.currentTarget.style.back
 export function parse<T>(raw: string | undefined): T | null { if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } }
 export const dayShort = (s?: string) => (s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
 
-/* ---------- follow-ups: the card shows its primary surface plus the few controls Jev picked; More reveals the rest (locally) ---------- */
-export function useFollowUps(offered: string[] | undefined, resetOn: unknown) {
-  const [more, setMore] = useState(false);
-  useEffect(() => { setMore(false); }, [resetOn]);
+/* ---------- follow-ups: the card is its primary surface plus the controls picked for this ask; a property that was not picked shows as data ---------- */
+export function useFollowUps(offered: string[] | undefined) {
   const set = new Set(offered ?? []);
   const gated = Array.isArray(offered);
-  return { has: (id: string) => !gated || more || set.has(id), more, toggle: () => setMore((m) => !m), gated };
-}
-export function MoreChip({ on, onClick, label }: { on: boolean; onClick: () => void; label?: string }) {
-  return <button type="button" onClick={onClick} title={on ? "Fewer controls" : "More controls"} style={{ ...bare, width: "auto", padding: "2px 8px", borderRadius: 6, fontSize: 12, color: v("text-secondary"), cursor: "pointer", background: on ? v("bg-subtle") : "transparent" }}>{on ? "Less" : label ?? "More"}</button>;
+  return { has: (id: string) => !gated || set.has(id) };
 }
 
 export function ErrorCard({ message }: { message: string }) { return <div style={{ ...card, ...pad, ...muted }}>{message}</div>; }

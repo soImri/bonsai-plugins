@@ -6,13 +6,13 @@
  * What a card sends is a short command in plain words; `write.ts` parses it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ErrorCard, MoreChip, OpenExternal, Picker, Placeholder, bare, card, footer, hoverable, muted, pad, row, useFollowUps, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
+import { Button, ErrorCard, OpenExternal, Picker, Placeholder, bare, card, footer, hoverable, muted, pad, row, useFollowUps, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
 
 type Conv = { id: string; name: string; kind: "channel" | "private" | "dm" | "group"; topic?: string; members?: number };
 type Reaction = { name: string; count: number; mine: boolean };
 type Att = { title?: string; link?: string; text?: string; pretext?: string; color?: string; footer?: string; author?: string; fields?: { title?: string; value: string }[]; image?: string };
 type Msg = { ref: string; channel: string; channelName: string; ts: string; threadTs?: string; time: string; userId?: string; user: string; initials: string; bot?: boolean; text: string; attachments?: Att[]; reactions: Reaction[]; replyCount: number; permalink?: string; mentionsMe: boolean; edited?: boolean; files?: { name: string; title?: string }[] };
-type Composition = { view: "inbox" | "channel" | "thread"; range: string; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean }; by: "jev" | "fallback"; followUps?: string[] };
+type Composition = { view: "inbox" | "channel" | "thread"; range: string; focus: "all" | "mentions" | "dms"; fields: { reactions: boolean; threads: boolean }; by: "jev" | "fallback" | "memory"; followUps?: string[] };
 
 const RANGE_LABEL: Record<string, string> = { today: "Today", yesterday: "Yesterday", "3_days": "Last 3 days", week: "This week", "2_weeks": "Last 2 weeks" };
 const EMOJI: Record<string, string> = { thumbsup: "👍", "+1": "👍", white_check_mark: "✅", eyes: "👀", heart: "❤️", tada: "🎉", raised_hands: "🙌", pray: "🙏", fire: "🔥", rocket: "🚀", joy: "😂", smile: "😄", thinking_face: "🤔", clap: "👏", wave: "👋", 100: "💯", ok_hand: "👌", point_up: "☝️" };
@@ -141,7 +141,7 @@ function ChannelView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const all: Msg[] = Array.isArray(d.messages) ? d.messages : [];
   const comp: Composition = d.composition ?? { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
   const isThread = d.view === "thread" && d.threadTs;
-  const fu = useFollowUps(comp.followUps, d);
+  const fu = useFollowUps(comp.followUps);
   if (!ch) return <Placeholder text="No conversation data." />;
   const { parents, repliesOf } = isThread ? { parents: all, repliesOf: new Map<string, Msg[]>() } : splitThreads(all);
   const days = new Map<string, Msg[]>();
@@ -156,7 +156,7 @@ function ChannelView({ ctx, note }: { ctx: UiCtx; note?: string }) {
             <div style={{ fontSize: 15, fontWeight: 700 }}>{isThread ? "Thread" : convLabel(ch)}{isThread ? <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}> · {convLabel(ch)}</span> : null}{ch.kind === "private" ? <span style={{ ...muted, fontSize: 12 }}> 🔒</span> : null}</div>
             {!isThread && (ch.topic || ch.members) ? <div style={{ ...muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{[ch.members ? `${ch.members} members` : null, ch.topic].filter(Boolean).join(" · ")}</div> : null}
           </div>
-          <span style={{ ...muted, fontSize: 12, flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 6 }}>{caption}{fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}</span>
+          <span style={{ ...muted, fontSize: 12, flexShrink: 0 }}>{caption}</span>
         </div>
         {!parents.length ? <div style={{ ...muted, padding: "8px" }}>No messages in the last two weeks.</div> : null}
         {[...days.entries()].map(([k, items]) => (
@@ -182,7 +182,7 @@ function InboxView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const [focus, setFocus] = useState<Composition["focus"]>(comp.focus);
   const [range, setRange] = useState<string>(comp.range);
   const [openConv, setOpenConv] = useState<string | null>(null);
-  const fu = useFollowUps(comp.followUps, d);
+  const fu = useFollowUps(comp.followUps);
   useEffect(() => { setFocus(comp.focus); setRange(comp.range); setOpenConv(null); }, [d]);
   const cutoff = Date.now() - (RANGE_DAYS[range] + (range === "today" ? 1 : 0)) * 864e5;
   const todayKey = new Date().toLocaleDateString("en-CA");
@@ -201,11 +201,10 @@ function InboxView({ ctx, note }: { ctx: UiCtx; note?: string }) {
           <span style={{ fontSize: 15, fontWeight: 700 }}>{title} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{msgs.length} messages</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
-        {fu.has("focus") || fu.has("ranges") || fu.gated ? <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
+        {fu.has("focus") || fu.has("ranges") ? <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
           {fu.has("focus") ? (["all", "mentions", "dms"] as const).map(f => <Tab key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab>) : null}
           <span style={{ flex: 1 }} />
           {fu.has("ranges") ? (["today", "3_days", "week", "2_weeks"] as const).map(r => <Tab key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL[r]}</Tab>) : null}
-          {fu.gated ? <MoreChip on={fu.more} onClick={fu.toggle} /> : null}
         </div> : null}
         {!groups.length ? <div style={{ ...muted, padding: 8 }}>{focus === "mentions" ? "No mentions" : focus === "dms" ? "No direct messages" : "Nothing"} {(RANGE_LABEL[range] ?? range).toLowerCase()}.</div> : null}
         {groups.map(([id, items]) => {
