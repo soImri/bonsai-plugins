@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "imri-plugins",
   "description": "Bonsai plugins and skills by Imri Sofer. Connector Cards first: connector-owned UI in the chat, Jev picks the view at runtime.",
-  "generatedAt": "2026-10-23T14:53:03.168Z",
+  "generatedAt": "2026-10-23T16:00:15.206Z",
   "categories": [
     {
       "id": "connectors",
@@ -24,9 +24,11 @@
         "agent",
         "ui"
       ],
-      "commit": "",
-      "creator": "",
-      "contributors": [],
+      "commit": "05f904a23792a953a780d092471602580a22cf90",
+      "creator": "Imri Sofer",
+      "contributors": [
+        "Imri Sofer"
+      ],
       "metadata": {},
       "digest": "sha256:3c5d34db03e7817568527d4957ff2a9cabb8fd25f4f31f2119b265e388908a51"
     }
