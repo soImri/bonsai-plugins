@@ -5,9 +5,11 @@
 import type { ConnectorUi } from "../ui/kit.tsx";
 import { linearUi } from "./linear/ui.tsx";
 import { gcalUi } from "./gcal/ui.tsx";
+import { slackUi } from "./slack/ui.tsx";
 
 export const connectorUis: ConnectorUi[] = [
   linearUi,
   gcalUi,
+  slackUi,
   // @connectors — the scaffold inserts new connectors above this line
 ];

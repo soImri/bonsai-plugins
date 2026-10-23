@@ -2,8 +2,8 @@
   "protocol": "kay.plugin.v1",
   "id": "com.imrisofer.connector-cards",
   "displayName": "Connector cards",
-  "description": "Connector cards: a connected app's own UI in the chat, for any connector. One tool call per ask; the plugin reads and writes the app itself through Bonsai's sign-in, and Jev picks the connector, the view and the fields at runtime. Linear and Google Calendar today; a scaffold adds more.",
-  "version": "0.6.0",
+  "description": "Connector cards: a connected app's own UI in the chat, for any connector. One tool call per ask; the plugin reads and writes the app itself through Bonsai's sign-in, and Jev picks the connector, the view and the fields at runtime. Linear and Google Calendar, Slack today; a scaffold adds more.",
+  "version": "0.7.0",
   "namespace": "cards",
   "compatibility": {
     "sdk": "^0.13.0"
@@ -91,6 +91,18 @@
             ],
             "purposes": [
               "Read and write Google Calendar events to draw and apply the calendar cards."
+            ]
+          },
+          {
+            "service": "slack.account",
+            "schemes": [
+              "slack.oauth"
+            ],
+            "operations": [
+              "resolve"
+            ],
+            "purposes": [
+              "Read and write Slack records to draw and apply the Slack cards."
             ]
           }
         ]

@@ -9,12 +9,12 @@ Four tools, any connector. One call draws the card: the plugin picks the connect
 
 | The ask | The one call |
 | --- | --- |
-| About several records: "what's open", "my issues", "where do we stand", "how is Evals v1 going", "what's on today", "my week", "show me this month", "when am I free next week", "find 30 min for a call", "invites I haven't answered", "who am I meeting tomorrow" | `cards_view { task: <their words>, refs?: [ids named], query?: <topic word>, filters?: {…} }` |
-| About one record: "show NEAT-9", "status of NEAT-9", "comment on NEAT-9 that …", "show my 3pm", "the call with Seb" | `cards_record { ref: "NEAT-9" \| "#a1b2c3" \| "<title>", draft?: <comment text> }` |
-| Make a new one: "create a ticket for …", "file a bug …", "schedule a call with Seb tomorrow at 3", "block Friday afternoon" | `cards_draft { task: <their words>, title: <≤ 80 chars>, body?: <≤ 3 lines>, fields?: {…} }` |
+| About several records: "what's open", "my issues", "where do we stand", "how is Evals v1 going", "what's on today", "my week", "show me this month", "when am I free next week", "find 30 min for a call", "invites I haven't answered", "who am I meeting tomorrow", "catch me up on Slack", "what's new in #neat-build", "anything for me on Slack", "my DMs" | `cards_view { task: <their words>, refs?: [ids named], query?: <topic word>, filters?: {…} }` |
+| About one record: "show NEAT-9", "status of NEAT-9", "comment on NEAT-9 that …", "show my 3pm", "the call with Seb", "show #neat-build", "show thread C0C6QSB2ULR/1783350000.000100" | `cards_record { ref: "NEAT-9" \| "#a1b2c3" \| "<title>", draft?: <comment text> }` |
+| Make a new one: "create a ticket for …", "file a bug …", "schedule a call with Seb tomorrow at 3", "block Friday afternoon", "post in #neat-build that …", "message Seb on Slack: …" | `cards_draft { task: <their words>, title: <≤ 80 chars>, body?: <≤ 3 lines>, fields?: {…} }` |
 | A message a card sent (see below) | `cards_apply { message: <the whole message, verbatim> }` |
 
-Pass `connector` ("linear", "gcal") only when the ask is ambiguous. A calendar ask about one specific date goes in `filters: { date: "YYYY-MM-DD" }`. A free-time slot click sends `Draft an event on <date> at <time> for <N> minutes`: answer it with `cards_draft { task, title: "New event", fields: { start, end } }`. For a calendar draft, put what the ask states into `fields`: `start` and `end` as the person's local date-time (`2026-10-24T15:00`), `attendees` as emails, `location`, `allDay`. Leave out what the ask does not say; Jev and the card fill the rest.
+Pass `connector` ("linear", "gcal", "slack") only when the ask is ambiguous. A calendar ask about one specific date goes in `filters: { date: "YYYY-MM-DD" }`. A free-time slot click sends `Draft an event on <date> at <time> for <N> minutes`: answer it with `cards_draft { task, title: "New event", fields: { start, end } }`. For a calendar draft, put what the ask states into `fields`: `start` and `end` as the person's local date-time (`2026-10-24T15:00`), `attendees` as emails, `location`, `allDay`. Leave out what the ask does not say; Jev and the card fill the rest.
 
 After the call returns, reply with nothing. Not a summary, not what the card shows, not what to press next: the card is the whole answer and the person navigates inside it (ranges, views, rows expand in place). The only exception is an error line when the tool reports one. Never rebuild a card as prose or a generic form.
 
@@ -24,7 +24,8 @@ Each one is exactly one `cards_apply { message }` call with the message verbatim
 
 - Linear: `Save NEAT-10: status → In Progress; labels → A, B` (one line per issue), `Comment on NEAT-10:` + body, `Create in NEAT: <title>` + a properties line and an optional `Description:` block.
 - Google Calendar: `Save event #a1b2c3: start → 2026-10-24 15:00; end → …`, `Create event: <title>` + a properties line and an optional `Notes:` block, `RSVP #a1b2c3: yes|no|maybe`, `Delete event #a1b2c3`.
-- A row click: `Show NEAT-7` or `Show event #a1b2c3` → `cards_record { ref }`.
+- Slack: `Post in #name:` + body (or `Post in @person:` for a DM), `Reply in #name <ts>:` + body, `React to #name <ts>: :emoji:`.
+- A row click: `Show NEAT-7`, `Show event #a1b2c3`, `Show #neat-build`, `Show thread <channelId>/<ts>` → `cards_record { ref }`. For a Slack draft, put the message text in `body`.
 
 For a change the person asks you for in words ("mark NEAT-10 done", "move my 3pm to 4"), use `cards_apply { connector, payload }` with the connector's own shape: Linear `{ changes: [{ identifier, state?, priority?, assignee?, project?, labels? }], comment?, create? }`; Google Calendar `{ changes: [{ key, title?, start?, end?, location?, guests?, meet? }], create?, rsvp?: { key, response }, delete?: key }`. Show the record first when you need its key.
 

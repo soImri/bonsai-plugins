@@ -4,7 +4,7 @@ A Bonsai marketplace: plugins and skills by Imri Sofer.
 
 | Item | Kind | What it is |
 | --- | --- | --- |
-| `plugins/connector-cards` | plugin | Connector Cards: connector-owned UI in Bonsai's chat. Linear first: issue, list, board, project and create cards in Linear's own shape. One tool call per ask; the plugin reads and writes Linear itself through Bonsai's Linear sign-in, and Jev picks the view and fields at runtime. |
+| `plugins/connector-cards` | plugin | Connector Cards: a connected app's own UI in Bonsai's chat. Linear (issue, list, board, project, create), Google Calendar (agenda, month, event, find a time, create) and Slack (channel, thread, activity, composer). One tool call per ask; the plugin reads and writes the app through Bonsai's sign-in, Jev picks the view and fields at runtime, and you navigate inside the card. |
 
 ## Add it to Bonsai
 
