@@ -1,0 +1,26 @@
+[
+  {
+    "parse": "Save __ID__ ABC-1: title → New title",
+    "expect": {
+      "changes.0.ref": "ABC-1",
+      "changes.0.fields.title": "New title"
+    }
+  },
+  {
+    "parse": "Create __ID__: A new record\nowner → me\n\nBody:\nDetails here",
+    "expect": {
+      "create.title": "A new record",
+      "create.fields.owner": "me",
+      "create.body": "Details here"
+    }
+  },
+  {
+    "ask": "TODO an ask that should list records",
+    "tool": "view",
+    "expect": {
+      "connector": "__ID__",
+      "kind": "view",
+      "composition.view": "list"
+    }
+  }
+]

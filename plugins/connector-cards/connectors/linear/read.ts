@@ -1,7 +1,7 @@
 /**
  * Linear reads: the team, its pick lists (cached), and issues, normalised to the card's shapes.
  */
-import type { DiskCache } from "../runtime.ts";
+import type { DiskCache } from "../../runtime.ts";
 import { asList, mcpCall } from "./mcp.ts";
 
 const META_TTL_MS = 10 * 60 * 1000;

@@ -1,1 +1,100 @@
-{"protocol": "kay.plugin.v1", "id": "com.imrisofer.connector-cards", "displayName": "Connector cards", "description": "Connector-owned UI in the chat. Linear first: issue, list, board, project and create cards in Linear's own shape. One tool call per ask; the plugin reads and writes Linear itself and Jev picks the view and fields at runtime.", "version": "0.3.0", "namespace": "linearcards", "compatibility": {"sdk": "^0.13.0"}, "targets": {"kay": {"agent": {"entrypoint": {"module": "./kay-agent.ts"}, "primer": "linear-cards", "contributes": {"skills": [{"localId": "linear-cards", "displayName": "Linear cards", "description": "Show, triage, or create Linear issues through Linear-shaped cards in the chat. One tool call with the person's words; the plugin reads Linear and Jev picks the view. Use for 'show NEAT-9', 'what's open', 'where do we stand', 'create an issue for', 'file this in Linear'.", "path": "./skills/linear-cards/SKILL.md"}], "tools": [{"localId": "issue", "toolName": "linearcards_issue", "displayName": "Linear issue card", "description": "Show one Linear issue as Linear's own issue view. Pass only the identifier; the plugin reads the issue and the team's pick lists itself."}, {"localId": "newissue", "toolName": "linearcards_newissue", "displayName": "Linear new issue", "description": "Draft a new Linear issue as Linear's create dialog. Pass the person's words and a short title; the plugin reads the pick lists and Jev picks status, priority, project, labels and assignee. The person edits and presses Create issue."}, {"localId": "view", "toolName": "linearcards_view", "displayName": "Linear view", "description": "Show Linear issues as Linear's own UI. Pass the person's words; the plugin reads Linear and Jev picks the view (issue, list, board, project), scope and fields."}, {"localId": "apply", "toolName": "linearcards_apply", "displayName": "Apply in Linear", "description": "Write what the person did on a Linear card (Save changes, Comment, Create issue) to Linear through its MCP server, then redraw the card from Linear's truth. Called with the JSON the card's 'Apply in Linear' message carries."}]}}, "ui": {"entrypoint": {"module": "./kay-ui.tsx"}}}}, "permissions": {"byTarget": {"kay.agent": {"auth": [{"service": "linear.account", "schemes": ["linear.mcp-oauth"], "operations": ["resolve"], "purposes": ["Read issues, states, labels, projects and members from the connected Linear workspace to draw the cards. Never writes."]}]}}}}
+{
+  "protocol": "kay.plugin.v1",
+  "id": "com.imrisofer.connector-cards",
+  "displayName": "Connector cards",
+  "description": "Connector cards: a connected app's own UI in the chat, for any connector. One tool call per ask; the plugin reads and writes the app itself through Bonsai's sign-in, and Jev picks the connector, the view and the fields at runtime. Linear and Google Calendar today; a scaffold adds more.",
+  "version": "0.4.0",
+  "namespace": "cards",
+  "compatibility": {
+    "sdk": "^0.13.0"
+  },
+  "targets": {
+    "kay": {
+      "agent": {
+        "entrypoint": {
+          "module": "./kay-agent.ts"
+        },
+        "primer": "connector-cards",
+        "contributes": {
+          "skills": [
+            {
+              "localId": "connector-cards",
+              "displayName": "Connector cards",
+              "description": "Show, draft, or change records of a connected app (Linear issues, Google Calendar events, more to come) through cards shaped like the app's own UI. One tool call with the person's words; the plugin reads the app and Jev picks the view. Use for 'what's open', 'show NEAT-9', 'what's on today', 'schedule a call', 'create a ticket', and the Save/Create/RSVP messages cards send.",
+              "path": "./skills/connector-cards/SKILL.md"
+            },
+            {
+              "localId": "add-connector",
+              "displayName": "Add a connector to Connector cards",
+              "description": "The process for giving a new connected app (Slack, Gmail, Notion\u2026) its own cards in the connector-cards plugin: inventory what Bonsai can reach, map the app's screens, scaffold the module, write the reads, rubrics, writes and compositions, build the eval set, test in fresh sessions. Use when asked to add a connector to connector cards or to make cards for an app.",
+              "path": "./skills/add-connector/SKILL.md"
+            }
+          ],
+          "tools": [
+            {
+              "localId": "view",
+              "toolName": "cards_view",
+              "displayName": "Connector cards: view",
+              "description": "Show records from a connected app as that app's own UI. Pass the person's words; the plugin routes to the connector, reads it, and Jev picks the view, scope and fields."
+            },
+            {
+              "localId": "record",
+              "toolName": "cards_record",
+              "displayName": "Connector cards: one record",
+              "description": "Show one record (an issue, an event) as the app's own detail view with live controls."
+            },
+            {
+              "localId": "draft",
+              "toolName": "cards_draft",
+              "displayName": "Connector cards: draft",
+              "description": "Draft a new record as the app's own create dialog; Jev picks the properties, the person edits and confirms on the card."
+            },
+            {
+              "localId": "apply",
+              "toolName": "cards_apply",
+              "displayName": "Connector cards: apply",
+              "description": "Write what the person did on a card back to its app (Save, Create, Comment, RSVP), then redraw the card from the app's truth."
+            }
+          ]
+        }
+      },
+      "ui": {
+        "entrypoint": {
+          "module": "./kay-ui.tsx"
+        }
+      }
+    }
+  },
+  "permissions": {
+    "byTarget": {
+      "kay.agent": {
+        "auth": [
+          {
+            "service": "linear.account",
+            "schemes": [
+              "linear.mcp-oauth"
+            ],
+            "operations": [
+              "resolve"
+            ],
+            "purposes": [
+              "Read and write Linear issues to draw and apply the Linear cards."
+            ]
+          },
+          {
+            "service": "google.account",
+            "schemes": [
+              "google.oauth"
+            ],
+            "operations": [
+              "resolve"
+            ],
+            "purposes": [
+              "Read and write Google Calendar events to draw and apply the calendar cards."
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

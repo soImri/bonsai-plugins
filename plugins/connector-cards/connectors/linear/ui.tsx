@@ -1,0 +1,252 @@
+/**
+ * Linear's compositions for the chat: IssueCard (issue view), NewIssueCard (create dialog), and
+ * ComposedView (list / board / project), drawn from the payloads `index.ts` produces. Jev picks
+ * which composition and which fields; this file only draws.
+ *
+ * What a card sends is a short command in plain words; `write.ts` parses it. Keep the three
+ * shapes here (saveLine, commentMessage, createMessage) and the parser in step.
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { Button, ErrorCard, GroupHeader, LongText, OpenExternal, Picker, Placeholder, ProgressBar, SaveBar, Timing, UserGlyph, bare, card, dayShort, footer, hoverable, mono, muted, pad, row, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
+
+/* ---------- types (the payload shapes index.ts produces) ---------- */
+type State = { name: string; type?: string };
+type Options = { states?: State[]; projects?: string[]; labels?: string[]; members?: string[] };
+type Issue = { identifier: string; title: string; description?: string; url?: string; state: State; priority: number; assignee?: string; project?: string; labels?: string[]; createdAt?: string; completedAt?: string; options?: Options; commentDraft?: string };
+type Draft = { team: string; title: string; description?: string; state?: string; priority: number; assignee?: string; project?: string; labels?: string[]; options?: Options };
+type Fields = { description?: boolean; labels?: boolean; dates?: boolean; assignee?: boolean; project?: boolean };
+type Composition = { view: "issue" | "list" | "board" | "project"; groupBy?: "status" | "project" | "assignee" | "priority"; sort?: "priority" | "newest" | "none"; scope?: string; fields: Fields; by: "jev" | "fallback"; confidence?: number };
+type Props = { state?: State; priority: number; assignee?: string; project?: string; labels: string[] };
+
+const PRIORITIES = ["No priority", "Urgent", "High", "Medium", "Low"];
+const DEFAULT_STATES: State[] = [{ name: "Backlog", type: "backlog" }, { name: "Todo", type: "unstarted" }, { name: "In Progress", type: "started" }, { name: "In Review", type: "started" }, { name: "Done", type: "completed" }, { name: "Canceled", type: "canceled" }];
+const STATE_ORDER = ["started", "unstarted", "backlog", "completed", "canceled"];
+const TIMING = { linear: "Linear", jev: "Jev" };
+const propsOf = (i: Issue, states: State[]): Props => ({ state: states.find(s => s.name === i.state?.name) ?? i.state, priority: i.priority ?? 0, assignee: i.assignee, project: i.project, labels: i.labels ?? [] });
+function diff(a: Props, b: Props): string[] {
+  const out: string[] = [];
+  if (a.state?.name !== b.state?.name) out.push(`status → ${b.state?.name}`);
+  if (a.priority !== b.priority) out.push(`priority → ${PRIORITIES[b.priority]}`);
+  if (a.assignee !== b.assignee) out.push(`assignee → ${b.assignee ?? "none"}`);
+  if (a.project !== b.project) out.push(`project → ${b.project ?? "none"}`);
+  if (a.labels.join("|") !== b.labels.join("|")) out.push(`labels → ${b.labels.length ? b.labels.join(", ") : "none"}`);
+  return out;
+}
+const saveLine = (identifier: string, changes: string[]) => `Save ${identifier}: ${changes.join("; ")}`;
+const commentMessage = (identifier: string, body: string) => `Comment on ${identifier}:\n${body}`;
+const createMessage = (team: string, title: string, p: Props, description: string) =>
+  `Create in ${team}: ${title}\nstatus → ${p.state?.name ?? "none"}; priority → ${PRIORITIES[p.priority]}; assignee → ${p.assignee ?? "none"}; project → ${p.project ?? "none"}; labels → ${p.labels.length ? p.labels.join(", ") : "none"}${description.trim() ? `\n\nDescription:\n${description.trim()}` : ""}`;
+
+/* ---------- glyphs ---------- */
+function StatusGlyph({ type }: { type?: string }) {
+  const c = type === "completed" ? v("success") : type === "started" ? v("warning") : type === "canceled" ? v("text-muted") : v("text-secondary");
+  if (type === "completed") return <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6.5" fill={c} /><path d="M4 7.2l2 2 4-4.4" stroke="white" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  if (type === "canceled") return <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6.5" fill={c} /><path d="M4.5 4.5l5 5M9.5 4.5l-5 5" stroke="white" strokeWidth="1.5" strokeLinecap="round" /></svg>;
+  if (type === "started") return <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" fill="none" /><path d="M7 2.5a4.5 4.5 0 0 1 0 9z" fill={c} /></svg>;
+  return <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" stroke={c} strokeWidth="1.5" fill="none" strokeDasharray={type === "backlog" ? "2 2" : undefined} /></svg>;
+}
+function PriorityGlyph({ p }: { p: number }) {
+  if (p === 1) return <svg width="14" height="14" viewBox="0 0 14 14"><rect x="1" y="1" width="12" height="12" rx="2.5" fill={v("warning")} /><path d="M7 3.5v4M7 9.8v.4" stroke="white" strokeWidth="1.6" strokeLinecap="round" /></svg>;
+  if (p === 0) return <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>;
+  const lit = p === 2 ? 3 : p === 3 ? 2 : 1;
+  return <svg width="14" height="14" viewBox="0 0 14 14">{[0, 1, 2].map(i => <rect key={i} x={1.5 + i * 4} y={9 - i * 3} width="3" height={4 + i * 3} rx="0.8" fill="currentColor" opacity={i < lit ? 1 : 0.28} />)}</svg>;
+}
+const ProjectGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M7 1.5l5 2.8v5.4L7 12.5 2 9.7V4.3z" /><path d="M2 4.3l5 2.8 5-2.8M7 7.1v5.4" /></svg>;
+const LabelGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 7.2V2.5h4.7L12 7.8 7.3 12.5z" strokeLinejoin="round" /><circle cx="5" cy="5.5" r="1" fill="currentColor" stroke="none" /></svg>;
+/** Linear's breadcrumb team label: the team's colour square and key, a label and nothing more. */
+const TeamChip = ({ k }: { k: string }) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: v("text-primary") }}><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: v("success") }} />{k}</span>;
+
+/* ---------- PropertyPills: Linear's five properties as pickers ---------- */
+function PropertyPills({ value, options, onChange, fields }: { value: Props; options: Options | undefined; onChange: (next: Props) => void; fields?: Fields }) {
+  const states = options?.states?.length ? options.states : DEFAULT_STATES;
+  const f = fields ?? {};
+  const show = (k: keyof Fields) => f[k] !== false;
+  return (
+    <div style={row}>
+      <Picker items={states} value={value.state} onPick={s => onChange({ ...value, state: s })} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} emphasis />
+      <Picker items={[0, 1, 2, 3, 4]} value={value.priority} onPick={p => onChange({ ...value, priority: p })} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
+      {show("assignee") ? <Picker items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={m => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} /> : null}
+      {show("project") ? <Picker items={options?.projects ?? (value.project ? [value.project] : [])} value={value.project} onPick={p => onChange({ ...value, project: p })} label="Project" lead={() => <ProjectGlyph />} keyOf={p => p} labelOf={p => p} /> : null}
+      {show("labels") ? <Picker items={options?.labels ?? value.labels} value={value.labels} multi onPick={l => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter(x => x !== l) : [...value.labels, l] })} label="Labels" lead={() => <LabelGlyph />} keyOf={l => l} labelOf={l => l} /> : null}
+    </div>
+  );
+}
+
+function CommentComposer({ identifier, draft, send }: { identifier: string; draft?: string; send: UiCtx["send"] }) {
+  const [text, setText] = useState(draft ?? "");
+  const [open, setOpen] = useState(Boolean(draft));
+  const [posting, setPosting] = useState(false);
+  useEffect(() => { if (draft) { setText(draft); setOpen(true); } }, [draft]);
+  async function post() { setPosting(true); await send(commentMessage(identifier, text.trim())); setPosting(false); setText(""); setOpen(false); }
+  if (!open) return <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
+      <textarea autoFocus style={{ ...bare, lineHeight: "22px" }} rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="Leave a comment…" aria-label="Comment" disabled={posting} />
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Button variant="secondary" size="sm" disabled={posting} onClick={() => { setOpen(false); setText(""); }}>Cancel</Button>
+        <Button variant="primary" size="sm" disabled={posting || !text.trim()} onClick={post}>{posting ? "Posting…" : "Comment"}</Button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- IssueCard: Linear's issue view ---------- */
+function IssueCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
+  const issue = ctx.details?.issue as Issue | undefined;
+  const states = issue?.options?.states?.length ? issue.options.states : DEFAULT_STATES;
+  const initial = useMemo<Props>(() => (issue ? propsOf(issue, states) : { priority: 0, labels: [] }), [issue]);
+  const [saved, setSaved] = useState<Props>(initial);
+  const [cur, setCur] = useState<Props>(initial);
+  const [saving, setSaving] = useState(false);
+  const dirty = useRef(false);
+  useEffect(() => { if (!dirty.current) { setSaved(initial); setCur(initial); } }, [initial]);
+  if (!issue?.title) return <Placeholder text="No issue data." />;
+  const changes = diff(saved, cur); dirty.current = changes.length > 0;
+  async function save() { setSaving(true); const next = cur; await ctx.send(saveLine(issue!.identifier, changes)); setSaved(next); setSaving(false); }
+  return (
+    <section style={card}>
+      <div style={pad}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ ...row, fontSize: 12, ...muted }}><TeamChip k={issue.identifier.split("-")[0]} /><span>›</span><span style={mono}>{issue.identifier}</span></div>
+          {issue.url ? <OpenExternal url={issue.url} title="Open in Linear" onOpen={ctx.openUrl} /> : null}
+        </div>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
+        {issue.description ? <LongText md={issue.description} /> : null}
+        <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}><PropertyPills value={cur} options={issue.options} onChange={setCur} /></div>
+        {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {dayShort(issue.createdAt)}{issue.completedAt ? ` · Done ${dayShort(issue.completedAt)}` : ""}</div> : null}
+        <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} />
+      </div>
+      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note ?? (ctx.details?.timing?.linear ? `Linear ${ctx.details.timing.linear}` : undefined)} />
+    </section>
+  );
+}
+
+/* ---------- NewIssueCard: Linear's create dialog ---------- */
+function NewIssueCard({ ctx }: { ctx: UiCtx }) {
+  const draft = ctx.details?.draft as Draft | undefined;
+  const states = draft?.options?.states?.length ? draft.options.states : DEFAULT_STATES;
+  const seed = useMemo<Props & { title: string; desc: string }>(() => ({ title: draft?.title ?? "", desc: draft?.description ?? "", state: states.find(s => s.name === draft?.state) ?? states[1], priority: draft?.priority ?? 0, assignee: draft?.assignee, project: draft?.project, labels: draft?.labels ?? [] }), [draft]);
+  const [title, setTitle] = useState(seed.title);
+  const [desc, setDesc] = useState(seed.desc);
+  const [props, setProps] = useState<Props>(seed);
+  const [sent, setSent] = useState(false);
+  const touched = useRef(false);
+  useEffect(() => { if (!touched.current) { setTitle(seed.title); setDesc(seed.desc); setProps(seed); } }, [seed]);
+  if (!draft?.team) return <Placeholder text="No draft data." />;
+  async function create() { setSent(true); await ctx.send(createMessage(draft!.team, title.trim(), props, desc)); }
+  return (
+    <section style={card}>
+      <div style={{ ...pad, paddingBottom: 12 }}>
+        <TeamChip k={draft.team} />
+        <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => { touched.current = true; setTitle(e.target.value); }} placeholder="Issue title" aria-label="Issue title" disabled={sent} />
+        <textarea style={{ ...bare, lineHeight: "22px" }} rows={3} value={desc} onChange={e => { touched.current = true; setDesc(e.target.value); }} placeholder="Add description…" aria-label="Add description" disabled={sent} />
+        <div style={{ pointerEvents: sent ? "none" : "auto", opacity: sent ? 0.7 : 1 }}><PropertyPills value={props} options={draft.options} onChange={p => { touched.current = true; setProps(p); }} /></div>
+      </div>
+      <div style={footer}>
+        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear…" : ctx.details?.picks ? <>{ctx.details.picks.by === "jev" ? "Fields picked by Jev" : "Default fields"} · <Timing t={ctx.details.timing} labels={TIMING} /></> : ""}</span>
+        <Button variant="primary" size="sm" disabled={sent || !title.trim()} onClick={create}>{sent ? "Creating…" : "Create issue"}</Button>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- rows ---------- */
+function IssueRow({ issue, value, onChange, options, fields, onOpen }: { issue: Issue; value: Props; onChange: (p: Props) => void; options?: Options; fields: Fields; onOpen: (id: string) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 8 }} {...hoverable}>
+      <Picker compact items={[0, 1, 2, 3, 4]} value={value.priority} onPick={p => onChange({ ...value, priority: p })} label="Priority" lead={p => <PriorityGlyph p={p ?? 0} />} keyOf={p => String(p)} labelOf={p => PRIORITIES[p]} />
+      <span style={{ ...muted, ...mono, fontSize: 12, width: 62, flexShrink: 0 }}>{issue.identifier}</span>
+      <Picker compact items={options?.states?.length ? options.states : DEFAULT_STATES} value={value.state} onPick={s => onChange({ ...value, state: s })} label="Status" lead={s => <StatusGlyph type={s?.type} />} keyOf={s => s.name} labelOf={s => s.name} />
+      <button type="button" onClick={() => onOpen(issue.identifier)} title={`Open ${issue.identifier}`} style={{ ...bare, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left", cursor: "pointer", fontSize: 14 }}>{issue.title}</button>
+      {fields.labels !== false ? <Picker compact items={options?.labels ?? value.labels} value={value.labels} multi onPick={l => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter(x => x !== l) : [...value.labels, l] })} label="Labels" lead={() => value.labels.length ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}><LabelGlyph />{value.labels.length}</span> : <LabelGlyph />} keyOf={l => l} labelOf={l => l} /> : null}
+      {fields.assignee !== false ? <Picker compact items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={m => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={m => m} labelOf={m => m} title={`Assignee: ${value.assignee ?? "none"}`} /> : null}
+      {fields.dates !== false && issue.createdAt ? <span style={{ ...muted, fontSize: 12, flexShrink: 0, width: 44, textAlign: "right" }}>{dayShort(issue.createdAt)}</span> : null}
+    </div>
+  );
+}
+
+/* ---------- ComposedView: Jev picked list / board / project (or one issue) ---------- */
+function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
+  const d = ctx.details ?? {};
+  const issues: Issue[] = Array.isArray(d.issues) ? d.issues : [];
+  const options: Options | undefined = d.options;
+  const comp = useMemo<Composition>(() => { const n = issues.length; const fb: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" }; const c = d.composition; return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...(c.fields ?? {}) } } : fb; }, [d]);
+  const states = options?.states?.length ? options.states : DEFAULT_STATES;
+  const seed = useMemo(() => Object.fromEntries(issues.map(i => [i.identifier, propsOf(i, states)])) as Record<string, Props>, [d]);
+  const [saved, setSaved] = useState(seed);
+  const [cur, setCur] = useState(seed);
+  const [saving, setSaving] = useState(false);
+  const dirty = useRef(false);
+  useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); } }, [seed]);
+  if (!issues.length) return <ErrorCard message={`No ${comp.scope && comp.scope !== "all" ? `${comp.scope} ` : ""}issues match.`} />;
+  const applied: string[] | undefined = Array.isArray(d.applied) ? d.applied : undefined;
+  const savedNote = note ?? (applied ? `Saved · ${applied.join(" · ")}${d.timing?.linear ? ` · Linear ${d.timing.linear}` : ""}` : undefined);
+
+  if (comp.view === "issue") {
+    const one = { ...issues[0], options: issues[0].options ?? options };
+    if (comp.fields.description === false) delete (one as any).description;
+    return <IssueCard ctx={{ ...ctx, details: { ...d, kind: "issue", issue: one } }} note={savedNote} />;
+  }
+
+  const changedIds = issues.filter(i => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map(i => i.identifier);
+  const changes = changedIds.map(id => saveLine(id, diff(saved[id], cur[id])));
+  dirty.current = changes.length > 0;
+  async function save() { setSaving(true); const next = cur; await ctx.send(changes.join("\n")); setSaved(next); setSaving(false); }
+  const open = (id: string) => { void ctx.send(`Show ${id}`); };
+  const team = d.team ?? issues[0]?.identifier.split("-")[0] ?? "";
+  const sorted = [...issues].sort((a, b) => comp.sort === "newest" ? (b.createdAt ?? "").localeCompare(a.createdAt ?? "") : comp.sort === "priority" ? ((a.priority || 9) - (b.priority || 9)) : 0);
+  const gb = comp.view === "board" || comp.view === "project" ? (comp.groupBy ?? "status") : undefined;
+  const stateOf = (i: Issue) => cur[i.identifier]?.state ?? i.state;
+  const keyFor = (i: Issue) => gb === "status" ? stateOf(i).name : gb === "project" ? (cur[i.identifier]?.project ?? "No project") : gb === "assignee" ? (cur[i.identifier]?.assignee ?? "Unassigned") : gb === "priority" ? PRIORITIES[cur[i.identifier]?.priority ?? 0] : "all";
+  const leadFor = (sample: Issue): ReactNode => gb === "status" ? <StatusGlyph type={stateOf(sample).type} /> : gb === "project" ? <ProjectGlyph /> : gb === "assignee" ? <UserGlyph /> : gb === "priority" ? <PriorityGlyph p={cur[sample.identifier]?.priority ?? 0} /> : null;
+  const groupsMap = new Map<string, Issue[]>();
+  for (const i of sorted) { const k = keyFor(i); groupsMap.set(k, [...(groupsMap.get(k) ?? []), i]); }
+  const groups = [...groupsMap.entries()].sort((a, b) => gb === "status" ? STATE_ORDER.indexOf(stateOf(a[1][0]).type ?? "") - STATE_ORDER.indexOf(stateOf(b[1][0]).type ?? "") : gb === "priority" ? PRIORITIES.indexOf(a[0]) - PRIORITIES.indexOf(b[0]) : a[0].localeCompare(b[0]));
+  const done = issues.filter(i => stateOf(i).type === "completed").length;
+  const inProgress = issues.filter(i => stateOf(i).type === "started").length;
+  const viewName = comp.view === "list" ? "List" : comp.view === "board" ? `Board by ${gb}` : "Project";
+  const t = d.timing as Record<string, string> | undefined;
+  const caption = savedNote ?? `${viewName} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.linear ? ` · Linear ${t.linear}` : ""}${t?.jev ? ` · Jev ${t.jev}` : ""}`;
+
+  return (
+    <section style={card}>
+      <div style={{ ...pad, gap: 8 }}>
+        {comp.view === "project" ? (
+          <>
+            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>›</span><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><ProjectGlyph />Project</span></div>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{d.project?.name ?? issues[0]?.project ?? "Project"}</h2>
+            {d.project?.description ? <div style={{ ...muted, fontSize: 13 }}>{d.project.description}</div> : null}
+            <div style={{ ...row, fontSize: 12, ...muted }}>{d.project?.lead ? <span>Lead {d.project.lead}</span> : null}{d.project?.targetDate ? <span>· Target {dayShort(d.project.targetDate)}</span> : null}<span>· {inProgress} in progress</span></div>
+            <ProgressBar done={done} total={issues.length} />
+          </>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ ...row, fontSize: 12, ...muted }}>{team ? <TeamChip k={team} /> : null}<span>{issues.length} {issues.length === 1 ? "issue" : "issues"}</span></div>
+            <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}>
+          {groups.map(([key, items], gi) => (
+            <div key={key} style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: gi === 0 ? 2 : 10 }}>
+              {gb ? <GroupHeader lead={leadFor(items[0])} label={key} count={items.length} /> : null}
+              {items.map(i => <IssueRow key={i.identifier} issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={p => setCur(c => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} />)}
+            </div>
+          ))}
+        </div>
+      </div>
+      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={comp.view === "project" ? caption : undefined} />
+    </section>
+  );
+}
+
+/* ---------- the connector's UI entry ---------- */
+function LinearUi({ ctx, note }: { ctx: UiCtx; note?: string }) {
+  switch (ctx.details?.kind) {
+    case "issue": return <IssueCard ctx={ctx} note={note} />;
+    case "draft": return <NewIssueCard ctx={ctx} />;
+    default: return <ComposedView ctx={ctx} note={note} />;
+  }
+}
+
+export const linearUi: ConnectorUi = { id: "linear", label: "Linear", component: LinearUi, runningText: (k) => (k === "apply" ? "Saving to Linear…" : "Reading Linear…") };

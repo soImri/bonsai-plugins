@@ -4,7 +4,7 @@
  * Bonsai's Linear token is minted for this server: api.linear.app/graphql answers 401 to it
  * (measured 2026-10-23), so every read and write here is a `tools/call` on mcp.linear.app.
  */
-import { HttpError } from "../runtime.ts";
+import { HttpError } from "../../runtime.ts";
 
 const MCP_URL = "https://mcp.linear.app/mcp";
 const MCP_PROTOCOL = "2025-06-18";

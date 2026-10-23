@@ -5,7 +5,7 @@
  * hosted route answers at most JEV_MAX_QUESTIONS and the runtime drops the tail. Every answer has a
  * heuristic twin, so a dropped question degrades to the heuristic, never to a hole.
  */
-import { JEV_MAX_QUESTIONS, choiceOf, yesOf, type JevAnswers, type JevQuestion } from "../runtime.ts";
+import { JEV_MAX_QUESTIONS, choiceOf, yesOf, type JevAnswers, type JevQuestion } from "../../runtime.ts";
 import type { Issue, Scope, TeamMeta } from "./read.ts";
 import { inScope } from "./read.ts";
 

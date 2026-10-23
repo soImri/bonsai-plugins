@@ -1,0 +1,60 @@
+# Adding a connector to Connector cards
+
+Connector cards gives a connected app its own UI inside Bonsai's chat. The person asks in words, the plugin reads the app through Bonsai's sign-in, Jev picks which screen and which fields fit the ask, the card renders, and edits write back through the same sign-in. Linear and Google Calendar are the first two connectors; this document is the process that produced the second one and is how the third gets added.
+
+## How it is put together
+
+```
+runtime.ts                 four generic tools (cards_view / record / draft / apply), connector routing,
+                           sign-in resolution, Jev (8-question cap, shrinking rubric), the pick log, cache
+connectors/index.ts        the registry (agent side)
+connectors/ui.ts           the registry (UI side)
+connectors/<id>/
+  index.ts                 defineConnector({ id, label, summary, aliases, auth, triggers, examples, filters,
+                                             view, record, draft, apply })
+  api.ts                   the app's calls, normalised records, cached pick lists
+  rubrics.ts               what Jev is asked, most important first, plus heuristic twins
+  write.ts                 the card grammar parser (Save …: field → value; Create …: title + properties)
+  ui.tsx                   the compositions, drawn from ui/kit.tsx, exported as a ConnectorUi
+  SCREENS.md               the screen map (which screens, which fields, what edits, what a Save writes)
+  evals.json               parse cases (offline) and live cases (the real tool, no model)
+ui/kit.tsx                 card chrome, Picker, SaveBar, glyphs, the ConnectorUi contract
+tools/new-connector.mjs    the scaffold;  tools/eval.mjs  the eval runner;  tools/template/  the template
+skills/                    connector-cards (the agent's one-page routing) and add-connector (this process, short)
+```
+
+The runtime routes a call to a connector in this order: the `connector` argument; a record reference the connector's `refPattern` recognises (NEAT-9, #a1b2c3); a card message its `messagePattern` claims; keyword hits in the task (ties go on); the only connector; Jev asked to choose among the connectors' summaries. So a connector declares how to recognise its asks and never sees another connector's.
+
+## The process, in order
+
+Each step leaves an artifact the next step uses.
+
+**1. Inventory: what can Bonsai reach?** Before any design, find the data route and the sign-in ids. `read plugin://<the app's plugin>` and `help <scheme>://` show what Bonsai already reads and writes and which service/scheme its sign-in uses. `read mcp://<server>` lists the app's MCP tools when it ships a server; sometimes that is the only surface the token accepts (Linear's token is refused by its GraphQL API; Google's works on REST). Write the route into the top of `SCREENS.md`.
+
+The plugin reaches the app through a *shared-identity* grant: the manifest declares `{service, schemes, operations: ["resolve"]}` under `permissions.byTarget.kay.agent.auth`, and the person grants `auth.shared-identity` for that service on the plugin's install row. Every declared service must be granted or the whole agent target is refused, so declare only what you ship.
+
+**2. Screen map.** Pick the three to five screens people have muscle memory for. Two sources beat online research: the app's own screens (open it in the browser pane) and the person's actual asks (`search sessions://` for the app's name). One table row per screen: screen → composition → fields shown → fields that edit → what a Save writes → what changes for chat. Rules that hold for every card: it mimics the app's UI, never a form of fields; edits batch behind Save, no write per click; one record per card when the ask names one; no navigation chrome.
+
+**3. Scaffold.** `node tools/new-connector.mjs <id> "<Label>" <serviceId> <schemeId>`. It creates the folder from the template, registers the connector on both sides, adds the sign-in to the manifest, and prints the grant the person must add. Fill the TODOs top to bottom.
+
+**4. Reads, rubrics, writes, compositions.**
+
+- `api.ts`: bearer calls; normalise to one plain record shape; cache pick lists for 10 minutes, stale-while-revalidate. Long opaque ids get a short stable key (`#a1b2c3`) so cards can name records in plain words; remember every key a card could send back.
+- `rubrics.ts`: at most 8 questions, most important first (the hosted Jev route refuses more; the runtime drops the tail on a 400). Choice criteria keys are plain tokens (`p0`, `s1`) mapped back after the answer. Every answer has a heuristic twin, so a dropped question degrades gracefully. Put `pastPicksForSimilarAsks` (the runtime's `history`) in the state.
+- `write.ts`: the card speaks a short human grammar in the chat; the agent passes the message verbatim. Unit-check the parser with the eval runner before wiring it.
+- `index.ts`: `apply` re-reads what it touched and returns a view or record payload, so the card redraws from the app's truth. Return `picked` (one line) from view and draft, and `correction` from apply when the person changed what the draft proposed; the runtime logs both.
+- `ui.tsx`: read `ctx.details`, send with `ctx.send`, open links with `ctx.openUrl`. Compositions are components; the connector's entry switches on `details.kind`.
+
+**5. Eval set.** `evals.json` holds parse cases (`{ parse, expect }`, run offline) and live cases (`{ ask, tool, args, expect }`, run through the real tool with the `kay` CLI, no model turn; never apply). `node tools/eval.mjs <id>` from an agent's Bash, or with `--session <id>` from a terminal. Expectations are dotted paths into the result's details: `"composition.view": "list"`. Keep it green; it is the regression gate when a rubric's wording changes.
+
+**6. Test like a person.** A git commit in the plugin directory reloads the plugin (touching files does not; toggling the install does not). Subagents keep the parent's plugin generation, so test in fresh top-level sessions and read their transcripts: one tool call and no reads before it, the expected connector, the composition Jev picked, the timing, and the card message round-tripping through `cards_apply`. Then look at the cards yourself; the agent cannot see them.
+
+**7. The loop.** The runtime logs every pick (`<dataDir>/picks.json`) and, for drafts, what the person changed before confirming. The last few picks for similar asks are fed into the rubric's state as `pastPicksForSimilarAsks`, so Jev sees what this person chose last time without any rubric edit. When the log shows a rubric wording consistently losing, change the wording and let the eval set say whether the change holds.
+
+## What Google Calendar cost
+
+The second connector, built with this process on 2026-10-23: inventory and screen map 15 minutes; api/rubrics/write/index about 350 lines; ui.tsx about 220 lines; evals 10 cases; two fresh-session tests. The things that bit: the Google sign-in needed the calendar scope granted once (`service_connect gcal`), and a freshly created event's key had to be remembered before a card could delete it.
+
+## Known limits
+
+Bonsai's structured card-action channel is reserved for its own `ui_render` cards, so a card's Save is a plain chat message the person can read. The agent cannot see rendered cards. The hosted Jev route takes 8 questions per call. One shared-identity grant per service, all required.
