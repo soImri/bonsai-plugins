@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "name": "imri-plugins",
+  "description": "Bonsai plugins and skills by Imri Sofer. Connector Cards first: connector-owned UI in the chat, Jev picks the view at runtime.",
+  "generatedAt": "2026-10-23T14:53:03.168Z",
+  "categories": [
+    {
+      "id": "connectors",
+      "label": "Connectors",
+      "description": "Plugins and skills that put a connected app's own UI in the chat."
+    }
+  ],
+  "skills": [],
+  "plugins": [
+    {
+      "path": "connector-cards",
+      "id": "com.imrisofer.connector-cards",
+      "displayName": "Connector cards",
+      "description": "Connector-owned UI in the chat. Linear first: issue, list, board, project and create cards in Linear's own shape. One tool call per ask; the plugin reads and writes Linear itself and Jev picks the view and fields at runtime.",
+      "category": "connectors",
+      "version": "0.3.0",
+      "sdk": "^0.13.0",
+      "targets": [
+        "agent",
+        "ui"
+      ],
+      "commit": "",
+      "creator": "",
+      "contributors": [],
+      "metadata": {},
+      "digest": "sha256:3c5d34db03e7817568527d4957ff2a9cabb8fd25f4f31f2119b265e388908a51"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# A marketplace's digests and signature cover bytes exactly as committed.
+#
+# Git may rewrite text files on checkout — `core.autocrlf=true` is Git for Windows' own recommended
+# default — and a rewritten byte is a different byte. Without this file, a marketplace signed on
+# Linux CI fails every digest AND its index signature on such a machine, all at once, and the
+# failure surfaces as "nothing here is verified" with no hint that line endings caused it.
+#
+# `-text` disables all end-of-line conversion for every path, so the working tree always holds the
+# committed bytes.
+* -text

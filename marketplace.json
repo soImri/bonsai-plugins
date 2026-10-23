@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "name": "imri-plugins",
+  "description": "Bonsai plugins and skills by Imri Sofer. Connector Cards first: connector-owned UI in the chat, Jev picks the view at runtime.",
+  "categories": [
+    {
+      "id": "connectors",
+      "label": "Connectors",
+      "description": "Plugins and skills that put a connected app's own UI in the chat."
+    }
+  ],
+  "skills": [],
+  "plugins": [
+    {
+      "path": "connector-cards",
+      "category": "connectors"
+    }
+  ]
+}
