@@ -60,6 +60,18 @@ function diff(a: Props, b: Props): string[] {
   if (a.labels.join("|") !== b.labels.join("|")) out.push(`labels → ${b.labels.length ? b.labels.join(", ") : "none"}`);
   return out;
 }
+/** The same diff as a change object for `linearcards_apply` (null clears a field). */
+function changeOf(identifier: string, a: Props, b: Props) {
+  const c: Record<string, unknown> = { identifier };
+  if (a.state?.name !== b.state?.name) c.state = b.state?.name;
+  if (a.priority !== b.priority) c.priority = b.priority;
+  if (a.assignee !== b.assignee) c.assignee = b.assignee ?? null;
+  if (a.project !== b.project) c.project = b.project ?? null;
+  if (a.labels.join("|") !== b.labels.join("|")) c.labels = b.labels;
+  return c;
+}
+/** The message a card sends: one human line, then the exact JSON the agent hands to linearcards_apply. */
+const applyMessage = (human: string, payload: unknown) => `Apply in Linear: ${human}\n\nCall linearcards_apply with exactly:\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``;
 
 /* ---------- glyphs ---------- */
 function StatusGlyph({ type }: { type?: string }) {
@@ -174,7 +186,8 @@ function CommentComposer({ identifier, draft, sessionId }: { identifier: string;
   useEffect(() => { if (draft) { setText(draft); setOpen(true); } }, [draft]);
   async function post() {
     setPosting(true);
-    await actions.sendMessage(`Comment on ${identifier}: ${text.trim()}`);
+    const body = text.trim();
+    await actions.sendMessage(applyMessage(`comment on ${identifier}`, { comment: { identifier, body } }));
     setPosting(false); setText(""); setOpen(false);
   }
   if (!open) return <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button>;
@@ -202,7 +215,7 @@ function Description({ md }: { md: string }) {
 }
 
 /* ---------- IssueCard: the core view ---------- */
-function IssueCard({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
+function IssueCard({ phase, rawArgs, rawResult, sessionId, note }: RendererProps & { note?: string }) {
   const details = useMemo(() => detailsOf(rawResult), [rawResult]);
   const issue = useMemo<Issue | null>(() => details?.issue ?? parse<Issue>(rawArgs), [details, rawArgs]);
   const actions = useKayActions(sessionId);
@@ -216,7 +229,7 @@ function IssueCard({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
   if (details?.error) return <ErrorCard message={details.error} />;
   if (!issue?.title || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Reading Linear…" : "No issue data."}</div>;
   const changes = diff(saved, cur); dirty.current = changes.length > 0;
-  async function save() { setSaving(true); const next = cur; await actions.sendMessage(`Update ${issue!.identifier}: ${changes.join("; ")}`); setSaved(next); setSaving(false); }
+  async function save() { setSaving(true); const next = cur; await actions.sendMessage(applyMessage(`${issue!.identifier}: ${changes.join("; ")}`, { changes: [changeOf(issue!.identifier, saved, cur)] })); setSaved(next); setSaving(false); }
   return (
     <section style={card}>
       <div style={pad}>
@@ -232,7 +245,7 @@ function IssueCard({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {day(issue.createdAt)}{issue.completedAt ? ` · Done ${day(issue.completedAt)}` : ""}</div> : null}
         <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} sessionId={sessionId} />
       </div>
-      <SaveBar count={changes.length} saving={saving} onDiscard={() => setCur(saved)} onSave={save} note={details?.timing?.linear ? `Linear ${details.timing.linear}` : undefined} />
+      <SaveBar count={changes.length} saving={saving} onDiscard={() => setCur(saved)} onSave={save} note={note ?? (details?.timing?.linear ? `Linear ${details.timing.linear}` : undefined)} />
     </section>
   );
 }
@@ -259,7 +272,7 @@ function NewIssueCard({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
     const final = { team: draft!.team, title: title.trim(), description: desc.trim(), state: props.state?.name, priority: props.priority, assignee: props.assignee, project: props.project, labels: props.labels };
     const summary = [props.state?.name, PRIORITIES[props.priority], props.assignee, props.project, props.labels.length ? props.labels.join(", ") : null].filter(Boolean).join(" · ");
     setSent(true);
-    await actions.sendMessage(`Create Linear issue in ${draft!.team}: "${final.title}" — ${summary}\n\n\`\`\`json\n${JSON.stringify(final, null, 2)}\n\`\`\``);
+    await actions.sendMessage(applyMessage(`create "${final.title}" in ${draft!.team} (${summary})`, { create: final }));
   }
   return (
     <section style={card}>
@@ -319,7 +332,7 @@ function readComposition(rawResult: string | undefined, n: number): Composition 
   return fallback;
 }
 
-function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
+function ComposedView({ phase, rawArgs, rawResult, sessionId, runningText }: RendererProps & { runningText?: string }) {
   const details = useMemo(() => detailsOf(rawResult), [rawResult]);
   const args = useMemo<ViewArgs | null>(() => (Array.isArray(details?.issues) ? (details as ViewArgs) : parse<ViewArgs>(rawArgs)), [details, rawArgs]);
   const actions = useKayActions(sessionId);
@@ -333,18 +346,21 @@ function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
   const dirty = useRef(false);
   useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); } }, [seed]);
   if (details?.error) return <ErrorCard message={details.error} />;
-  if (!args || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? "Reading Linear…" : "No issues."}</div>;
+  if (!args || phase === "running") return <div style={{ ...card, ...pad, ...muted }}>{phase === "running" ? (runningText ?? "Reading Linear…") : "No issues."}</div>;
   if (!issues.length) return <ErrorCard message={`No ${(comp as any).scope && (comp as any).scope !== "all" ? `${(comp as any).scope} ` : ""}issues match.`} />;
+  const applied: string[] | undefined = Array.isArray(details?.applied) ? details.applied : undefined;
+  const savedNote = applied ? `Saved · ${applied.join(" · ")}${details?.timing?.linear ? ` · Linear ${details.timing.linear}` : ""}` : undefined;
 
   if (comp.view === "issue" && issues.length >= 1) {
     const one = { ...issues[0], options: issues[0].options ?? args.options };
     if (comp.fields.description === false) delete (one as any).description;
-    return <IssueCard phase={phase} rawArgs={JSON.stringify(one)} sessionId={sessionId} />;
+    return <IssueCard phase={phase} rawArgs={JSON.stringify(one)} sessionId={sessionId} note={savedNote} />;
   }
 
-  const changes = issues.flatMap(i => { const d = saved[i.identifier] && cur[i.identifier] ? diff(saved[i.identifier], cur[i.identifier]) : []; return d.length ? [`Update ${i.identifier}: ${d.join("; ")}`] : []; });
+  const changedIds = issues.filter(i => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map(i => i.identifier);
+  const changes = changedIds.map(id => `${id}: ${diff(saved[id], cur[id]).join("; ")}`);
   dirty.current = changes.length > 0;
-  async function save() { setSaving(true); const next = cur; await actions.sendMessage(changes.join("\n")); setSaved(next); setSaving(false); }
+  async function save() { setSaving(true); const next = cur; await actions.sendMessage(applyMessage(changes.join(" · "), { changes: changedIds.map(id => changeOf(id, saved[id], cur[id])) })); setSaved(next); setSaving(false); }
   const open = (id: string) => { void actions.sendMessage(`Show ${id}`); };
   const team = issues[0]?.identifier.split("-")[0] ?? "";
   const sorted = [...issues].sort((a, b) => comp.sort === "newest" ? (b.createdAt ?? "").localeCompare(a.createdAt ?? "") : comp.sort === "priority" ? ((a.priority || 9) - (b.priority || 9)) : 0);
@@ -359,7 +375,7 @@ function ComposedView({ phase, rawArgs, rawResult, sessionId }: RendererProps) {
   const inProgress = issues.filter(i => stateOf(i).type === "started").length;
   const viewName = comp.view === "list" ? "List" : comp.view === "board" ? `Board by ${gb}` : "Project";
   const t = details?.timing as { linear?: string; jev?: string } | undefined;
-  const caption = `${viewName} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.linear ? ` · Linear ${t.linear}` : ""}${t?.jev ? ` · Jev ${t.jev}` : ""}`;
+  const caption = savedNote ?? `${viewName} view · ${comp.by === "jev" ? "picked by Jev" : "default pick"}${t?.linear ? ` · Linear ${t.linear}` : ""}${t?.jev ? ` · Jev ${t.jev}` : ""}`;
 
   return (
     <section style={card}>
@@ -401,5 +417,6 @@ export default function activate(api) {
   const a = api.slots.registerToolRenderer("linearcards_issue", IssueCard, presentation);
   const b = api.slots.registerToolRenderer("linearcards_newissue", NewIssueCard, presentation);
   const c = api.slots.registerToolRenderer("linearcards_view", ComposedView, presentation);
-  return { dispose() { a.dispose(); b.dispose(); c.dispose(); } };
+  const d = api.slots.registerToolRenderer("linearcards_apply", (p: RendererProps) => <ComposedView {...p} runningText="Saving to Linear…" />, presentation);
+  return { dispose() { a.dispose(); b.dispose(); c.dispose(); d.dispose(); } };
 }

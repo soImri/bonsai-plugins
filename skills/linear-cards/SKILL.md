@@ -5,7 +5,7 @@ description: Show, triage, or create Linear issues through Linear-shaped cards i
 
 # Linear cards
 
-One tool call draws the card. The plugin reads Linear itself through Bonsai's Linear connection, Jev picks the layout and fields at runtime, and the card renders. Speed is the point: call the tool in your first step. Do not read `linear://`, `mcp://linear`, tool schemas, memory, or the repo first. Do not research the topic. The person fixes anything on the card.
+One tool call draws the card. The plugin reads and writes Linear itself through Bonsai's Linear connection, Jev picks the layout and fields at runtime, and the card renders. Speed is the point: call the tool in your first step. Do not read `linear://`, `mcp://linear`, tool schemas, memory, or the repo first. Do not research the topic. The person fixes anything on the card.
 
 | The ask | The one call |
 | --- | --- |
@@ -18,12 +18,10 @@ After the call returns, reply with at most one short line, or nothing. Never res
 
 ## Messages the cards send back
 
-Each one needs exactly one Linear MCP call, then one short confirming line. Do not redraw the card unless noted.
+Each one is exactly one tool call, then one short line (or nothing). Never call the Linear MCP yourself for these.
 
-- `Update NEAT-10: status → In Progress; labels → Decision, Design` (one line per issue): per line, `mcp(server: "linear", tool: "save_issue", args: { id: "NEAT-10", state: "In Progress", labels: ["Decision", "Design"] })`. Field map: status → `state`, priority → `priority` (0 none, 1 urgent, 2 high, 3 medium, 4 low), assignee → `assignee` (`none` → null), project → `project` (`none` → null), labels → `labels` (full list; `none` → []).
-- `Comment on NEAT-10: <text>`: `mcp(server: "linear", tool: "save_comment", args: { issueId: "NEAT-10", body: <text> })`.
-- `Create Linear issue in NEAT: …` followed by a JSON block: `mcp(server: "linear", tool: "save_issue", args: { team, title, description, state, priority, assignee, project, labels })` with the JSON's values (drop empty ones), then `linearcards_issue { identifier: <the new identifier> }`.
-- `Show NEAT-7`: `linearcards_issue { identifier: "NEAT-7" }`.
+- `Apply in Linear: …` followed by a ```json block (sent by Save changes, Comment, and Create issue): call `linearcards_apply` with exactly that JSON. It writes to Linear and redraws the card with what Linear saved. Bonsai may ask you to approve the write; that is expected.
+- `Show NEAT-7` (a row click): `linearcards_issue { identifier: "NEAT-7" }`.
 
 ## If the tool reports an error
 
