@@ -152,10 +152,12 @@ async function fetchMeta(token: string, team: TeamRef, viewer: string, dataDir: 
   const states: State[] = asList(s, "statuses").map((x: any, i: number) => ({ name: x.name, type: x.type, position: typeof x.position === "number" ? x.position : TYPE_ORDER.indexOf(x.type) * 100 + i })).filter((x: State) => x.type !== "duplicate").sort((a: State, b: State) => (a.position ?? 0) - (b.position ?? 0));
   const seen = new Set<string>();
   const labels: Label[] = asList(l, "labels").filter((x: any) => !x.isGroup && !x.retiredAt && !x.archivedAt).filter((x: any) => (seen.has(x.name) ? false : (seen.add(x.name), true))).map((x: any) => ({ name: x.name, ...(x.description ? { description: x.description } : {}) }));
+  const members: string[] = asList(u, "users").filter((m: any) => m.isActive !== false).map((m: any) => m.displayName ?? m.name).filter(Boolean);
   const meta: TeamMeta = {
-    id: team.id, key: team.key, name: team.name, viewer, at: Date.now(),
+    // `get_user {id:"me"}` does not resolve on Linear's MCP server; on a one-person team that person is the viewer.
+    id: team.id, key: team.key, name: team.name, viewer: viewer || (members.length === 1 ? members[0] : ""), at: Date.now(),
     states,
-    members: asList(u, "users").filter((m: any) => m.isActive !== false).map((m: any) => m.displayName ?? m.name).filter(Boolean),
+    members,
     labels,
     projects: asList(p, "projects").map((x: any) => ({ name: x.name, ...(x.summary || x.description ? { summary: String(x.summary || x.description).slice(0, 240) } : {}), ...(x.lead?.displayName || x.lead?.name || typeof x.lead === "string" ? { lead: x.lead?.displayName ?? x.lead?.name ?? x.lead } : {}), ...(x.targetDate ? { targetDate: x.targetDate } : {}), ...(x.status?.name || x.state ? { status: x.status?.name ?? x.state } : {}) })),
   };
