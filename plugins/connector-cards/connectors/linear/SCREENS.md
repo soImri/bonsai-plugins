@@ -14,15 +14,13 @@
 
 **Jev picks (view):** scope (open/active/done/all), view, groupBy, sort, then description/assignee/labels/dates fields. **Jev picks (draft):** priority, project, up to five labels, state, assign-to-me.
 
-**Follow-ups (up to three per card, picked from the ask, the context and the recipe for similar asks; a property that is not picked shows as data):**
+**Follow-ups (additive only; every native control is always live):**
 
-| Screen | Primary surface | Follow-up candidates (`when`) |
+| Screen | Native controls (always) | Follow-up candidates (`when`) |
 | --- | --- | --- |
-| Issue | identifier, title, description, properties as pills, open-in-Linear | `status` (progress, done, start) · `priority` (triage, urgency) · `comment` (respond, feedback, a question on it; always when a draft is passed) · `assignee` (who owns it, hand-off) · `labels` (categorising, bug/feature) · `project` (planning across projects) |
-| List / board / project | the rows (expand in place), scope label | `edit` (inline priority/status pickers: triage, planning, review) · `scopes` (open / in progress / done / all) · `views` (list / board / project tabs) · `group` (regroup a board) · `create` (+ New issue inline) |
-| Create | title, description, Jev-picked properties as pills | `priority` · `project` · `labels` · `assignee` · `state` (the picked ones become pickers) |
-
-A bare "show NEAT-9" is the issue with its properties as plain pills; "show NEAT-9" while triaging gets the priority picker; while answering Seb gets the comment box.
+| Issue | status, priority, assignee, project, labels pickers; comment box (collapsed button); Save | `comment`: the box opens ready to type (answering, feedback, an update; always when a draft is passed) |
+| List / board / project | List/Board/Project tabs, group picker, scope tabs, inline pickers on every row, rows expand in place, Save | `create`: a `+ New issue` button opens the create dialog in the card (planning, grooming, "add", "file") |
+| Create | title, description, all five property pickers | none |
 
 **Card messages:** `Save NEAT-10: status → …; labels → …` · `Comment on NEAT-10:` + body · `Create in NEAT: <title>` + properties line + optional `Description:` block · `Show NEAT-7`.
 

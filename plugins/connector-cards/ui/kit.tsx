@@ -41,11 +41,10 @@ export const hoverable = { onMouseEnter: (e: any) => (e.currentTarget.style.back
 export function parse<T>(raw: string | undefined): T | null { if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } }
 export const dayShort = (s?: string) => (s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
 
-/* ---------- follow-ups: the card is its primary surface plus the controls picked for this ask; a property that was not picked shows as data ---------- */
+/* ---------- follow-ups: additive secondary actions. `picked(id)` is true only when this ask picked it; the screen's own controls never depend on it ---------- */
 export function useFollowUps(offered: string[] | undefined) {
   const set = new Set(offered ?? []);
-  const gated = Array.isArray(offered);
-  return { has: (id: string) => !gated || set.has(id) };
+  return { picked: (id: string) => set.has(id) };
 }
 
 export function ErrorCard({ message }: { message: string }) { return <div style={{ ...card, ...pad, ...muted }}>{message}</div>; }
@@ -75,11 +74,9 @@ export function OpenExternal({ url, title, onOpen }: { url: string; title: strin
 }
 
 /* ---------- Picker: a pill (or a bare glyph) that opens a portaled list ---------- */
-export function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title, readOnly }: {
+export function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title }: {
   items: T[]; value: T | T[] | undefined; onPick: (t: T) => void; label: string;
   lead: (t: T | undefined) => ReactNode; keyOf: (t: T) => string; labelOf: (t: T) => string; emphasis?: boolean; multi?: boolean; compact?: boolean; title?: string;
-  /** Show the value as a plain pill (no caret, no menu): the property is not one of this card's follow-ups. */
-  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -103,10 +100,6 @@ export function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, e
   const text = selected.length ? selected.map(labelOf).join(", ") : label;
   const isSel = (t: T) => selected.some(s => keyOf(s) === keyOf(t));
   const single = Array.isArray(value) ? undefined : value;
-  if (readOnly) {
-    if (compact) return <span title={title ?? `${label}: ${text}`} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 22, height: 22, color: v("text-secondary"), padding: "0 3px" }}>{lead(single)}</span>;
-    return <span style={{ display: "inline-flex" }}><Pill tone={emphasis ? "emphasis" : "neutral"} surface={emphasis ? "bare" : "glass"} lead={lead(single)}>{text}</Pill></span>;
-  }
   return (
     <div ref={trigger} style={{ display: "inline-flex" }} onClick={e => e.stopPropagation()}>
       {compact

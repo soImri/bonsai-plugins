@@ -13,7 +13,6 @@
 import { HttpError, defineConnector, classify, ms, type Run, type CardResult, remembered } from "../../runtime.ts";
 import { SlackError, findChannel, postMessage, react, readChannel, readInbox, readMeta, readThread, type Channel, type Message, type Meta } from "./api.ts";
 import { RANGE_DAYS, RANGE_LABEL, draftRubric, viewRubric, type Composition, type Picks } from "./rubrics.ts";
-import { viewFollowUps } from "./rubrics.ts";
 import { parseCardMessage } from "./write.ts";
 
 const CHANNEL_REF = /(?:^|\s)#[a-z0-9][\w.'-]{1,}/i;
@@ -81,7 +80,7 @@ export const slack = defineConnector({
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
     const [{ value, took: tJev }, fu] = await Promise.all([
       remembered(recall, () => jev({ purpose: "slack-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess)),
-      followUps("slack-follow-ups", { task, shape: view, messageCount: messages.length, mentions: messages.filter((m) => m.mentionsMe).length, sample: messages.slice(-4).map((m) => `${m.user}: ${m.text.slice(0, 80)}`) }, viewFollowUps(task, view, messages)),
+      followUps("slack-follow-ups", { task }, []),
     ]);
     const comp = value as Composition;
     comp.followUps = fu.actions;
@@ -97,7 +96,7 @@ export const slack = defineConnector({
     return { summary: `Card shown (${shown.length} messages, ${label}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions, remember: comp };
   },
 
-  async record({ token, params, signal, startedAt, cache, followUps }: Run): Promise<CardResult> {
+  async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
     const meta = await readMeta(token, cache, signal);
     const ref = String(params.ref ?? "").trim();
     const { channel, ts } = resolve(meta, ref) ;
@@ -108,8 +107,7 @@ export const slack = defineConnector({
       return { summary: `Card shown (thread in #${c.name}). Reply with nothing.`, payload: { kind: "view", view: "thread", me: meta.me, channel: channelInfo(c), threadTs: ts, messages, conversations: conversationsFor(meta), composition: { view: "thread", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: "replies", ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
     }
     const r = await readChannel(token, meta, c, 14, signal);
-    const fu = await followUps("slack-follow-ups", { task: params.ref, shape: "channel", messageCount: r.messages.length }, viewFollowUps(String(params.ref ?? ""), "channel", r.messages));
-    return { summary: `Card shown (#${c.name}). Reply with nothing.`, offered: fu.actions, remember: { by: fu.by }, picked: `channel${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true, followUps: fu.actions }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
+    return { summary: `Card shown (#${c.name}). Reply with nothing.`, picked: "channel", payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -154,7 +152,7 @@ export const slack = defineConnector({
     else { const r = await readChannel(token, meta, target, 14, signal); messages = r.messages; via = r.via; view = "channel"; }
     return {
       summary: `Sent to Slack: ${applied.join("; ")}. The card shows the result; reply with nothing.`, used,
-      payload: { kind: "view", view, me: meta.me, channel: channelInfo(target), ...(threadTs && !post ? { threadTs } : {}), messages, conversations: conversationsFor(meta), composition: { view, range: "2_weeks", focus: "all", fields: { reactions: true, threads: true, followUps: used }, by: "fallback" }, via, applied, timing: { slack: tWrite } },
+      payload: { kind: "view", view, me: meta.me, channel: channelInfo(target), ...(threadTs && !post ? { threadTs } : {}), messages, conversations: conversationsFor(meta), composition: { view, range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via, applied, timing: { slack: tWrite } },
     };
   },
 });

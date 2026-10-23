@@ -3,7 +3,7 @@
  * own screens (see SCREENS.md), never a form of fields. Edits batch behind Save.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ErrorCard, LongText, OpenExternal, Placeholder, SaveBar, bare, card, footer, hoverable, muted, pad, useFollowUps, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
+import { Button, ErrorCard, LongText, OpenExternal, Placeholder, SaveBar, bare, card, footer, hoverable, muted, pad, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
 
 type Rec = { ref: string; title: string; subtitle?: string; body?: string; url?: string; fields: { [k: string]: string | number | boolean | null } };
 
@@ -17,8 +17,6 @@ function RecordCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const [title, setTitle] = useState(seed);
   const [saving, setSaving] = useState(false);
   useEffect(() => setTitle(seed), [seed]);
-  // The follow-ups picked for this ask: the primary surface shows always; a control shows when `fu.has(id)`, else its value shows as data.
-  const fu = useFollowUps(ctx.details?.followUps ?? ctx.details?.composition?.followUps);
   if (!rec) return <Placeholder text="No record data." />;
   const changes = title !== rec.title ? [`title → ${title}`] : [];
   async function save() { setSaving(true); await ctx.send(saveLine(rec!.ref, changes)); setSaving(false); }
@@ -29,7 +27,7 @@ function RecordCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
           <span style={{ ...muted, fontSize: 12 }}>{rec.ref}</span>
           {rec.url ? <OpenExternal url={rec.url} title="Open in __LABEL__" onOpen={ctx.openUrl} /> : null}
         </div>
-        {fu.has("title") ? <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => setTitle(e.target.value)} aria-label="Title" /> : <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{rec.title}</h2>}
+        <input style={{ ...bare, fontSize: 16, fontWeight: 600 }} value={title} onChange={e => setTitle(e.target.value)} aria-label="Title" />
         {rec.subtitle ? <div style={muted}>{rec.subtitle}</div> : null}
         {rec.body ? <LongText md={rec.body} /> : null}
       </div>

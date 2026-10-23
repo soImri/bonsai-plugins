@@ -5,7 +5,7 @@
  * by Jev. Jev picks the shape of the feed: how far back, whether only mentions or DMs, which
  * fields, and for a draft, which channel among the likely ones.
  */
-import { choiceOf, yesOf, type FollowUp, type JevAnswers, type JevQuestion } from "../../runtime.ts";
+import { choiceOf, yesOf, type JevAnswers, type JevQuestion } from "../../runtime.ts";
 import type { Channel, Message } from "./api.ts";
 
 export type Range = "today" | "yesterday" | "3_days" | "week" | "2_weeks";
@@ -65,21 +65,4 @@ export function draftRubric(task: string, text: string, candidates: Channel[]) {
     return { channel: named?.id ?? c?.id ?? guess().channel, by: "jev", confidence: answers.channel.confidence, variant };
   };
   return { state, questions, read, guess, named };
-}
-
-
-/* ---------- follow-ups: what the person is likely to do right after seeing the card ---------- */
-/** A channel, thread or inbox card: the messages are the surface; writing back and refocusing are the follow-ups. */
-export function viewFollowUps(task: string, view: Composition["view"], messages: { mentionsMe?: boolean; replyCount?: number; threadTs?: string }[]): FollowUp[] {
-  const w = task.toLowerCase();
-  const mentions = messages.filter((m) => m.mentionsMe).length;
-  const threads = messages.filter((m) => m.replyCount || m.threadTs).length;
-  const asked = /\b(reply|respond|answer|post|say|tell|send|message|write)\w*/.test(w);
-  return [
-    { id: "compose", label: view === "thread" ? "reply in the thread" : "post a message in the conversation", when: "The person is catching up to respond, was asked something (mentions), said they want to reply or post, or usually writes after reading this conversation.", unless: "A read-only look (what happened, a summary, a check) with nothing addressed to them.", guess: asked || mentions > 0 || view === "thread" },
-    { id: "reply", label: "reply inside a thread from the message rows", when: `Threads are in view (${threads}) and the ask is about a discussion to answer or continue.`, unless: "No threads, or the person is only reading.", guess: threads > 0 && (asked || mentions > 0) },
-    { id: "react", label: "react with an emoji from the message rows", when: "Acknowledging, approving, a quick 👍 or ✅ is the natural response (a request, a decision to confirm, a share to applaud).", unless: "The person is reading a summary or a bot feed.", guess: mentions > 0 },
-    { id: "focus", label: "switch the inbox focus (all, mentions, DMs)", when: "The inbox view and the ask spans kinds of messages, or mentions/DMs exist beside the rest.", unless: "A single channel or thread.", guess: view === "inbox" && mentions > 0 },
-    { id: "ranges", label: "switch the range (today, 3 days, week, 2 weeks)", when: "Catching up after time away, or an ask whose neighbouring range is the natural next look.", guess: /\b(catch|miss|away|week|while|lately)\w*/.test(w) },
-  ];
 }

@@ -15,14 +15,12 @@
 
 **Jev picks (view):** range, focus, show threads, show reactions. **Jev picks (draft):** the conversation (up to 8 candidates).
 
-**Follow-ups (up to three per card, picked from the ask, the context and the recipe for similar asks; a property that is not picked shows as data):**
+**Follow-ups (additive only; every native control is always live):**
 
-| Screen | Primary surface | Follow-up candidates (`when`) |
+| Screen | Native controls (always) | Follow-up candidates |
 | --- | --- | --- |
-| Channel / thread | the messages, day dividers, threads expand in place, open-in-Slack | `compose` (the composer: mentions, asked to reply, usually writes here) · `reply` (reply boxes under threads) · `react` (quick reactions: acknowledging, approving) |
-| Inbox | conversations with their recent messages, expand in place | `compose` · `reply` · `react` · `focus` (All / Mentions / DMs) · `ranges` (Today / 3 days / Week / 2 weeks) |
-
-"What's new in #neat-build" is a read; the same ask with "he wants to reply to the latest post" gets the composer.
+| Channel / thread | composer, threads open in place with reply box, reactions and quick reactions, open-in-Slack | none yet |
+| Inbox | All / Mentions / DMs and range chips, conversations expand in place with composer | none yet |
 
 **Card messages (writes only):** `Post in #name:` + body · `Reply in #name <ts>:` + body · `React to #name <ts>: :emoji:`.
 

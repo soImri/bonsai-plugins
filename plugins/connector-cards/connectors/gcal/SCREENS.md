@@ -19,15 +19,13 @@
 
 **Keys:** events are named `#a1b2c3` (a hash of calendar + event id) in cards and messages; the key → id map lives in the connector's cache.
 
-**Follow-ups (up to three per card, picked from the ask, the context and the recipe for similar asks; a property that is not picked shows as data):**
+**Follow-ups (additive only; every native control is always live):**
 
-| Screen | Primary surface | Follow-up candidates (`when`) |
+| Screen | Native controls (always) | Follow-up candidates (`when`) |
 | --- | --- | --- |
-| Event | title, time, location, Meet button, guests, notes | `rsvp` (unanswered invite, going?) · `reschedule` (move, conflict, later) · `guests` (invite, who) · `details` (rename, where) |
-| Agenda / month / find a time | the events (rows expand in place with RSVP + reschedule), day panel | `ranges` (catching up, planning, neighbouring range) · `rsvp` (pending invites in view) · `find` (scheduling intent; not on a find-a-time view) · `create` (+ New event inline; always on find a time) |
-| Create | title, date and time, all-day | `guests` (people named, a call) · `meet` (a call) · `location` (in person) · `notes` (detail in the ask) · `calendar` (more than one writable) |
-
-"Schedule a call with Seb" shows guests and Meet; "block Friday afternoon for focus" shows neither.
+| Event | click-to-edit title, time, location, guests; Join Meet; RSVP row when invited; Save | none |
+| Agenda / month / find a time | range chips, Find a time, rows expand in place, day panel, slot picking | `create`: a `+ New event` button opens the create dialog in the card (planning, blocking time, a prep block the context names) |
+| Create | title, date and time, all-day, guests, Meet, location, notes, calendar | none |
 
 **Card messages:** `Save event #a1b2c3: title → …; start → 2026-10-24 15:00; end → …; location → …; guests → …; meet → yes` · `Create event: <title>` + properties line + optional `Notes:` block · `RSVP #a1b2c3: yes|no|maybe` · `Delete event #a1b2c3` · `Show event #a1b2c3`.
 

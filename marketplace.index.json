@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "imri-plugins",
   "description": "Bonsai plugins and skills by Imri Sofer. Connector Cards: a connected app's own UI in the chat (Linear, Google Calendar, Slack), Jev picks the view at runtime.",
-  "generatedAt": "2026-10-23T19:21:10.702Z",
+  "generatedAt": "2026-10-23T19:36:40.505Z",
   "categories": [
     {
       "id": "connectors",
@@ -18,19 +18,19 @@
       "displayName": "Connector cards",
       "description": "Connector cards: a connected app's own UI in the chat, for any connector. One tool call per ask; the plugin reads and writes the app itself through Bonsai's sign-in, and Jev picks the connector, the view and the fields at runtime. Linear and Google Calendar, Slack today; a scaffold adds more.",
       "category": "connectors",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "sdk": "^0.13.0",
       "targets": [
         "agent",
         "ui"
       ],
-      "commit": "010a4af76c80da402d6f7ac78338408a157049ec",
+      "commit": "939699c4c36d35f297e248d576c34bf8eb06a1ff",
       "creator": "Imri Sofer",
       "contributors": [
         "Imri Sofer"
       ],
       "metadata": {},
-      "digest": "sha256:2a05758c6d078f007a3cf459c56cb39796a42e171ceb326d12c9d5fcc00c6b88"
+      "digest": "sha256:10823cdcbd35898db000f762ffc62492c95cfa4af6716a068198654d95850eb9"
     }
   ]
 }

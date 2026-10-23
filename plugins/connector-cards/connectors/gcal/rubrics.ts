@@ -145,40 +145,12 @@ export function createRubric(task: string, title: string, hasEnd: boolean, atten
 }
 
 
-/* ---------- follow-ups: what the person is likely to do right after seeing the card ---------- */
-const low = (t: string) => t.toLowerCase();
-/** One event: the details are the surface; answering, moving, and inviting are the follow-ups. */
-export function eventFollowUps(task: string, ev: { myResponse?: string; attendees?: unknown[]; meet?: string }): FollowUp[] {
-  const w = low(task);
-  const pending = ev.myResponse === "needsAction";
+/* ---------- follow-ups: additive secondary actions. The screen's own controls (range chips, Find a time, click-to-edit, RSVP, the create dialog's fields) are always there and always live; a follow-up only adds something. ---------- */
+/** An agenda or month card: a + New event button opens the create dialog inside the card. */
+export function agendaFollowUps(task: string, view: string): FollowUp[] {
+  const w = task.toLowerCase();
+  if (view === "free") return [];
   return [
-    { id: "rsvp", label: "answer the invitation (yes / no / maybe)", when: "The invitation is unanswered, or the ask is about whether to go, accept, decline.", unless: "It is the person's own event, or already answered and nothing suggests changing it.", guess: pending || /\b(accept|decline|going|rsvp|attend)\w*/.test(w) },
-    { id: "reschedule", label: "move or retime the event", when: "Moving, pushing, rescheduling, a conflict, running late, or 'can we do it later' is in the ask or the context.", guess: /\b(move|resched|push|later|earlier|conflict|shift|change the time)\w*/.test(w) },
-    { id: "guests", label: "add or remove guests", when: "Inviting someone, who is coming, adding a person named in the conversation.", guess: /\b(invite|add|guest|attendee|who)\w*/.test(w) },
-    { id: "details", label: "edit the title or location", when: "The ask or context is about renaming it or where it happens.", guess: /\b(rename|title|location|where|room|address)\w*/.test(w) },
-  ];
-}
-/** An agenda, month or find-a-time card: the events are the surface; range switches, availability and new events are the follow-ups. */
-export function agendaFollowUps(task: string, view: string, events: { myResponse?: string }[]): FollowUp[] {
-  const w = low(task);
-  const pending = events.filter((e) => e.myResponse === "needsAction").length;
-  const scheduling = /\b(find|free|available|availability|book|schedule|slot|when can|time for|set up|setup)\w*/.test(w);
-  return [
-    { id: "ranges", label: "switch the range (today, tomorrow, this week, next week, month)", when: "Catching up, planning, or an ask whose natural next look is the neighbouring range ('what's today' → tomorrow; 'this week' → next week).", unless: "The ask is about one specific day or event and nothing else.", guess: /\b(week|catch|plan|ahead|coming|month)\w*/.test(w) || view === "month" },
-    { id: "rsvp", label: "answer unanswered invitations from the rows", when: `There are unanswered invitations in view (${pending} now), or the ask is about invites.`, unless: "No invitations are pending.", guess: pending > 0 },
-    ...(view === "free" ? [] : [{ id: "find", label: "find a free time", when: "Scheduling intent: booking, 'when can I', a call to set up, someone to meet, a slot to find.", guess: scheduling } as FollowUp]),
-    { id: "create", label: "add a new event", when: "Planning or blocking time, 'add', 'put', 'block', 'book', a task to fit in; a find-a-time view where picking a slot creates the event.", guess: view === "free" || /\b(add|put|block|book|new event|create)\w*/.test(w), always: view === "free" },
-  ];
-}
-/** The create dialog: title and time are always editable; guests, Meet, location, notes and calendar show when likely. */
-export function draftFollowUps(task: string, d: { attendees: string[]; meet: boolean; location?: string; description?: string }, calendarCount: number): FollowUp[] {
-  const w = low(task);
-  const call = /\b(call|meet|meeting|sync|chat|catch up|interview|1:1|one on one)\b/.test(w);
-  return [
-    { id: "guests", label: "add guests", when: "The ask names people or is a meeting, call, sync, interview; guests were parsed already.", unless: "A solo block (focus time, reminder, errand).", guess: d.attendees.length > 0 || call },
-    { id: "meet", label: "toggle Google Meet", when: "A call or remote meeting where video may or may not be wanted.", unless: "In person, or a solo block.", guess: call },
-    { id: "location", label: "set a location", when: "In person: a place, address, office, restaurant, 'at <place>'.", guess: Boolean(d.location) || /\b(at the|office|room|restaurant|address|in person|lunch|dinner|coffee)\b/.test(w) },
-    { id: "notes", label: "add a description", when: "The ask carries detail worth keeping (an agenda, a link, a note), or notes were drafted.", guess: Boolean(d.description) },
-    { id: "calendar", label: "choose the calendar", when: `More than one writable calendar (${calendarCount}) and the ask does not make the calendar obvious.`, unless: "One calendar only.", guess: calendarCount > 1 },
+    { id: "create", label: "add a new event from here (a + New event button opens the create dialog in the card)", when: "Planning or blocking time: 'add', 'put', 'block', 'book', a task to fit in, a prep block before a meeting the context names.", unless: "A plain look at the day or week.", guess: /\b(add|put|block|book|new event|create|fit in|prep)\w*/.test(w) },
   ];
 }

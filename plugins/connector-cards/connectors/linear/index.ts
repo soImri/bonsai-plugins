@@ -10,7 +10,7 @@
  */
 import { HttpError, defineConnector, classify, ms, remembered, type Run, type CardResult } from "../../runtime.ts";
 import { ISSUE_FIELDS, PRIORITY_NAMES, normalizeIssue, optionsOf, readIssues, teamContext, type Issue } from "./read.ts";
-import { createRubric, deriveTitle, draftFollowUps, issueFollowUps, listFollowUps, settle, viewRubric, type Composition, type Picks } from "./rubrics.ts";
+import { createRubric, deriveTitle, issueFollowUps, listFollowUps, settle, viewRubric, type Composition, type Picks } from "./rubrics.ts";
 import { applyChange, createIssue, describeChange, parseCardMessage, postComment, type Change, type Comment, type Create } from "./write.ts";
 import { mcpCall } from "./mcp.ts";
 
@@ -76,24 +76,21 @@ export const linear = defineConnector({
     return { summary: `Card shown (${issue.identifier}). Reply with nothing.`, payload: { kind: "issue", issue: full, followUps: fu.actions, timing: { linear: tLinear, jev: fu.took } }, picked: `issue${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions, remember: { by: fu.by } };
   },
 
-  async draft({ token, params, signal, startedAt, jev, cache, history, followUps }: Run): Promise<CardResult> {
+  async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
     const { team, meta } = await teamContext(token, params.fields?.team ?? params.filters?.team, params.task, cache, signal);
     const tLinear = ms(startedAt);
     const title = (params.title?.trim() || deriveTitle(params.task)).slice(0, 120);
     const description = params.body?.trim() ?? "";
     const rubric = createRubric(params.task, title, description, meta);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
-    const [{ value: picks, took: tJev }, fu] = await Promise.all([
-      jev({ purpose: "linear-new-issue" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, rubric.guess) as Promise<{ value: Picks; took: string }>,
-      followUps("linear-follow-ups", { task: params.task, title, team: team.key }, draftFollowUps(params.task, rubric.guess(), meta)),
-    ]);
-    const draft = { team: team.key, title, description, state: picks.state, priority: picks.priority, ...(picks.assignee ? { assignee: picks.assignee } : {}), ...(picks.project ? { project: picks.project } : {}), labels: picks.labels, options: optionsOf(meta), followUps: fu.actions };
+    const { value: picks, took: tJev } = await jev({ purpose: "linear-new-issue" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, rubric.guess) as { value: Picks; took: string };
+    const draft = { team: team.key, title, description, state: picks.state, priority: picks.priority, ...(picks.assignee ? { assignee: picks.assignee } : {}), ...(picks.project ? { project: picks.project } : {}), labels: picks.labels, options: optionsOf(meta) };
     const summary = [draft.state, PRIORITY_NAMES[draft.priority], draft.project, draft.labels.join(", "), draft.assignee].filter(Boolean).join(" · ");
     void tLinear; void tJev;
     return {
       summary: `Create dialog shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Create in ${team.key}:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft, picks: { by: picks.by, confidence: picks.confidence }, timing: { linear: tLinear, jev: tJev } },
-      picked: summary, offered: fu.actions, remember: { by: fu.by },
+      picked: summary,
     };
   },
 
@@ -119,7 +116,7 @@ export const linear = defineConnector({
     const fresh = (await Promise.all([...touched].map((id) => mcpCall(token, "get_issue", { id, fields: ISSUE_FIELDS }, signal).catch(() => undefined)))).filter((g) => g && (g as any).id).map(normalizeIssue) as Issue[];
     // Which follow-ups the person exercised: the learning signal, and what the refreshed card keeps open.
     const used = [...new Set([...changes.flatMap((c) => ["state" in c ? "status" : "", "priority" in c ? "priority" : "", "assignee" in c ? "assignee" : "", "labels" in c ? "labels" : "", "project" in c ? "project" : ""].filter(Boolean)), ...(comment ? ["comment"] : []), ...(create ? ["create"] : [])])];
-    const comp: Composition = { view: fresh.length === 1 ? "issue" : "list", groupBy: "status", sort: "none", scope: "all", fields: { description: fresh.length === 1, labels: true, dates: false, assignee: true, project: true }, by: "fallback", followUps: used.filter((u) => u !== "create") };
+    const comp: Composition = { view: fresh.length === 1 ? "issue" : "list", groupBy: "status", sort: "none", scope: "all", fields: { description: fresh.length === 1, labels: true, dates: false, assignee: true, project: true }, by: "fallback", followUps: [] };
     return {
       summary: `Saved to Linear: ${applied.join("; ")}. The card shows the result; reply with nothing.`,
       payload: { kind: "view", task: "Saved", team: meta.key, issues: fresh, options: optionsOf(meta), composition: comp, applied, timing: { linear: tWrite } },

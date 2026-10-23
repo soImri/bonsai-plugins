@@ -23,20 +23,15 @@ export function viewRubric(task: string, records: Record[]) {
 }
 
 
-/* ---------- follow-ups: the few controls the card offers beside its primary surface ---------- */
-// TODO: one factory per screen. At most 8 candidates; the card shows at most 3; `More` reveals the rest.
-// `when` is what makes the control likely (words in the ask, the conversation context, what the person did after
-// similar asks); `guess` is the heuristic twin for when Jev is unavailable.
+/* ---------- follow-ups: additive secondary actions. The screen's own controls are always drawn and always live; a follow-up only adds something. ---------- */
+// TODO: list the few additive actions per screen (a composer already open, a + New button). Many screens have none.
 export function recordFollowUps(task: string): FollowUp[] {
-  const w = task.toLowerCase();
-  return [
-    { id: "title", label: "rename the record", when: "The ask or the context is about renaming or correcting it.", guess: /\b(rename|title|call it)\b/.test(w) },
-    // { id: "status", label: "change its status", when: "...", guess: ... },
-  ];
+  void task;
+  return [];
 }
 export function listFollowUps(task: string): FollowUp[] {
   const w = task.toLowerCase();
   return [
-    { id: "create", label: "add a new record from here", when: "Planning or grooming where new items come up; the person said they want to add something.", guess: /\b(add|new|create)\b/.test(w) },
+    { id: "create", label: "add a new record from here (a + New button opens the create dialog in the card)", when: "Planning or grooming where new items come up; the person said they want to add something.", guess: /\b(add|new|create)\b/.test(w) },
   ];
 }

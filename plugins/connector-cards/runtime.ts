@@ -79,25 +79,25 @@ async function historyFor(cache: DiskCache, connector: string, kind: CardKind, t
   if (!want.size) return [];
   const all = await readPicks(cache);
   return all.filter((p) => p.connector === connector && p.kind === kind && [...words(p.task)].some((w) => want.has(w))).slice(-5)
-    .map((p) => `"${p.task}"${p.context ? ` (${p.context})` : ""} → ${p.picked}${p.offered?.length ? `; follow-ups offered: ${p.offered.join(", ")}` : ""}${p.used?.length ? `; then used: ${p.used.join(", ")}${p.used.some((u) => !(p.offered ?? []).includes(u)) ? " (not offered!)" : ""}` : ""}${p.correction ? `; the person then changed: ${p.correction}` : ""}`);
+    .map((p) => `"${p.task}"${p.context ? ` (${p.context})` : ""} → ${p.picked}${p.offered?.length ? `; follow-ups offered: ${p.offered.join(", ")}` : ""}${p.used?.length ? `; then: ${p.used.join(", ")}` : ""}${p.correction ? `; the person then changed: ${p.correction}` : ""}`);
 }
 /** How often each follow-up was used after being offered, and how often it was needed without being offered: the prior Jev reads. */
 async function usageFor(cache: DiskCache, connector: string): Promise<string> {
   const all = (await readPicks(cache)).filter((p) => p.connector === connector && (p.offered?.length || p.used?.length));
   if (!all.length) return "none yet";
   const offered: Record<string, number> = {}, used: Record<string, number> = {}, missed: Record<string, number> = {};
-  for (const p of all) { for (const a of p.offered ?? []) offered[a] = (offered[a] ?? 0) + 1; for (const a of p.used ?? []) { used[a] = (used[a] ?? 0) + 1; if (!(p.offered ?? []).includes(a)) missed[a] = (missed[a] ?? 0) + 1; } }
-  return Object.keys({ ...offered, ...used }).map((a) => `${a}: offered ${offered[a] ?? 0}, used ${used[a] ?? 0}${missed[a] ? `, needed but not offered ${missed[a]}` : ""}`).join("; ");
+  for (const p of all) { for (const a of p.offered ?? []) offered[a] = (offered[a] ?? 0) + 1; for (const raw of p.used ?? []) { const typed = raw.endsWith(" (typed)"); const a = raw.replace(/ \(typed\)$/, ""); if (typed) missed[a] = (missed[a] ?? 0) + 1; else used[a] = (used[a] ?? 0) + 1; } }
+  return Object.keys({ ...offered, ...used, ...missed }).map((a) => `${a}: offered ${offered[a] ?? 0}, done on the card ${used[a] ?? 0}${missed[a] ? `, typed instead ${missed[a]}` : ""}`).join("; ");
 }
 /** When a card's message comes back, note which follow-up it was on the last card of this connector (the learning signal). */
-async function noteUsed(cache: DiskCache, connector: string, used: string[]) {
+async function noteUsed(cache: DiskCache, connector: string, used: string[], viaCard: boolean) {
   if (!used.length) return;
   const all = await readPicks(cache);
   const last = [...all].reverse().find((p) => p.connector === connector && p.kind !== "apply" && Date.now() - new Date(p.at).getTime() < 2 * 3600e3);
   if (!last) return;
   const first = !last.used?.length;
-  const mapped = last.recipe && first ? await scoreRecipe(cache, last.recipe, last.offered ?? [], used) : used;
-  last.used = [...new Set([...(last.used ?? []), ...mapped])];
+  const mapped = last.recipe && first ? await scoreRecipe(cache, last.recipe, used, viaCard) : used;
+  last.used = [...new Set([...(last.used ?? []), ...mapped.map((m) => (viaCard ? m : `${m} (typed)`))])];
   await cache.write("picks", all.slice(-300));
 }
 
@@ -163,28 +163,31 @@ async function rememberRecipe(cache: DiskCache, p: { connector: string; kind: Ca
   await cache.write("recipes", all.slice(-500));
   return r.id;
 }
-/** The person's next move on a card: covered by what it offered (success) or not (miss, and the recipe learns the control). */
-async function scoreRecipe(cache: DiskCache, id: string, offered: string[], used: string[]): Promise<string[]> {
+/**
+ * The person's next move after a card. Done on the card itself (a Save, a Send, a Create from its own
+ * controls): the card covered it, a success. Typed instead (the agent wrote through `payload` because
+ * the person asked in words): the card did not let them do it where they were, a miss; the recipe
+ * learns the control the move maps to, so a similar ask offers it next time.
+ */
+async function scoreRecipe(cache: DiskCache, id: string, used: string[], viaCard: boolean): Promise<string[]> {
   const all = await readRecipes(cache);
   const r = all.find((x) => x.id === id);
   if (!r) return used;
   const covers = r.covers ?? {};
-  // A move ("priority") is covered by an offered control whose id matches or whose `covers` lists it ("edit").
-  const controlFor = (u: string) => offered.find((o) => o === u || (covers[o] ?? []).includes(u)) ?? Object.keys(covers).find((c) => c === u || (covers[c] ?? []).includes(u)) ?? u;
-  const moves = used.filter((u) => u !== "create" && u !== "delete").map(controlFor);
-  const missing = moves.filter((m) => !offered.includes(m));
-  if (moves.length) { if (missing.length) r.misses++; else r.successes++; }
-  for (const m of moves) r.followUpUses[m] = (r.followUpUses[m] ?? 0) + 1;
+  const controlFor = (u: string) => Object.keys(covers).find((c) => c === u || (covers[c] ?? []).includes(u)) ?? u;
+  const moves = used.map(controlFor);
+  if (moves.length) { if (viaCard) r.successes++; else r.misses++; }
+  for (const m of moves) if (m in covers) r.followUpUses[m] = (r.followUpUses[m] ?? 0) + 1;
   await cache.write("recipes", all.slice(-500));
-  return [...new Set([...moves, ...used.filter((u) => u === "create" || u === "delete")])];
+  return [...new Set(moves)];
 }
 
 /* ---------- follow-ups: the few actions the card offers beside its primary surface ---------- */
 /**
- * A follow-up is one control a card can show beyond what the task itself needs: a priority picker
- * on an issue, a reply box under a thread, RSVP buttons on an event. The card shows the primary
- * surface plus the follow-ups Jev judged likely from the ask, the conversation context, and what
- * the person did after similar asks; everything else waits behind "More" (one local click).
+ * A follow-up is an ADDITIVE secondary action: something the card gains for this ask beyond the
+ * screen it mimics (a comment box already open, a + New issue button, a + New event button). The
+ * screen's own controls are never follow-ups: they are always drawn and always live. Jev picks the
+ * follow-ups from the ask, the conversation context, and the record of similar asks.
  */
 export type FollowUp = { id: string; label: string; when: string; unless?: string; guess: boolean; always?: boolean;
   /** The move ids (as `apply` reports them in `used`) this control covers, when they differ from its id: a list's `edit` covers priority, status, assignee…. */
@@ -197,7 +200,7 @@ export async function pickFollowUps(jev: Decide, purpose: string, state: object,
   const asked = candidates.filter((c) => !c.always).slice(0, JEV_MAX_QUESTIONS);
   if (!asked.length) return { actions: always, by: "fallback", took: "0 ms" };
   const questions: Record<string, JevQuestion> = {};
-  for (const c of asked) questions[c.id] = { type: "bool", instructions: `Will the person want to ${c.label} right after seeing this card, without typing another message? Judge the ask, the conversation context, and what they did after similar asks. Offer at most ${MAX_FOLLOW_UPS} follow-ups per card: say yes only when this one is likely, not merely possible.`, criteria: { true: c.when, false: c.unless ?? "Nothing in the ask or the context points at it; the person would be fine with it one click away under More." } };
+  for (const c of asked) questions[c.id] = { type: "bool", instructions: `Will the person want to ${c.label} right after seeing this card, without typing another message? Judge the ask, the conversation context, and what they did after similar asks. Say yes only when this is likely, not merely possible: the card already has the screen's own controls.`, criteria: { true: c.when, false: c.unless ?? "Nothing in the ask or the context points at it; the person would be fine with it one click away under More." } };
   const { value, took, by } = await jev({ purpose }, async (j) => {
     const { answers } = await classify(j, { ...state, conversationContext: context || "none (a fresh ask)", followUpUsageSoFar: usage }, questions);
     const probabilities: Record<string, number> = {};
@@ -400,7 +403,7 @@ export function registerCards(api: any, connectors: Connector[]) {
           const by = String(remember?.by ?? (recall?.eligible ? "memory" : offered ? "jev" : "fallback"));
           const recipeId = tool.kind !== "apply" ? await rememberRecipe(root, { connector: connector.id, kind: tool.kind, task, context, by, composition: remember, followUps: offered ?? [], covers, recall }) : undefined;
           if (picked) await logPick(root, { at: new Date().toISOString(), connector: connector.id, kind: tool.kind, task, picked, by, ...(context ? { context } : {}), ...(offered?.length ? { offered } : {}), ...(recipeId ? { recipe: recipeId } : {}) });
-          if (used?.length) await noteUsed(root, connector.id, used);
+          if (used?.length) await noteUsed(root, connector.id, used, typeof params?.message === "string" && params.message.trim().length > 0);
           if (correction) { const all = await readPicks(root); const last = [...all].reverse().find((p) => p.connector === connector.id && p.kind === "draft"); if (last) { last.correction = correction; await root.write("picks", all.slice(-300)); } }
           const timing = { ...((payload.timing as object) ?? {}), total: ms(startedAt) };
           // The agent sees one terse line; routing, picks and timings ride in `details.debug` for the card and the evals.

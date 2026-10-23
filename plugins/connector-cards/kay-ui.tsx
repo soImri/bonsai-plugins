@@ -27,8 +27,7 @@ function parse(raw) {
 var dayShort = (s) => s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
 function useFollowUps(offered) {
   const set = new Set(offered ?? []);
-  const gated = Array.isArray(offered);
-  return { has: (id) => !gated || set.has(id) };
+  return { picked: (id) => set.has(id) };
 }
 function ErrorCard({ message }) {
   return <div style={{ ...card, ...pad, ...muted }}>{message}</div>;
@@ -54,7 +53,7 @@ function OpenExternal({ url, title, onOpen }) {
       <OpenGlyph />
     </button>;
 }
-function Picker({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title, readOnly }) {
+function Picker({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, multi, compact, title }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null);
   const trigger = useRef(null);
@@ -86,10 +85,6 @@ function Picker({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, m
   const text = selected.length ? selected.map(labelOf).join(", ") : label;
   const isSel = (t) => selected.some((s) => keyOf(s) === keyOf(t));
   const single = Array.isArray(value) ? void 0 : value;
-  if (readOnly) {
-    if (compact) return <span title={title ?? `${label}: ${text}`} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 22, height: 22, color: v("text-secondary"), padding: "0 3px" }}>{lead(single)}</span>;
-    return <span style={{ display: "inline-flex" }}><Pill tone={emphasis ? "emphasis" : "neutral"} surface={emphasis ? "bare" : "glass"} lead={lead(single)}>{text}</Pill></span>;
-  }
   return <div ref={trigger} style={{ display: "inline-flex" }} onClick={(e) => e.stopPropagation()}>
       {compact ? <button
     type="button"
@@ -196,23 +191,24 @@ function PriorityGlyph({ p }) {
 var ProjectGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M7 1.5l5 2.8v5.4L7 12.5 2 9.7V4.3z" /><path d="M2 4.3l5 2.8 5-2.8M7 7.1v5.4" /></svg>;
 var LabelGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2 7.2V2.5h4.7L12 7.8 7.3 12.5z" strokeLinejoin="round" /><circle cx="5" cy="5.5" r="1" fill="currentColor" stroke="none" /></svg>;
 var TeamChip = ({ k }) => <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: v("text-primary") }}><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: v("success") }} />{k}</span>;
-function PropertyPills({ value, options, onChange, fields, can }) {
+function PropertyPills({ value, options, onChange, fields }) {
   const states = options?.states?.length ? options.states : DEFAULT_STATES;
   const f = fields ?? {};
   const show = (k) => f[k] !== false;
-  const ro = (id) => can ? !can(id) : false;
-  const skip = (id, has) => ro(id) && !has;
   return <div style={row}>
-      <Picker items={states} value={value.state} onPick={(s) => onChange({ ...value, state: s })} label="Status" lead={(s) => <StatusGlyph type={s?.type} />} keyOf={(s) => s.name} labelOf={(s) => s.name} emphasis readOnly={ro("status")} />
-      {skip("priority", value.priority > 0) ? null : <Picker items={[0, 1, 2, 3, 4]} value={value.priority} onPick={(p) => onChange({ ...value, priority: p })} label="Priority" lead={(p) => <PriorityGlyph p={p ?? 0} />} keyOf={(p) => String(p)} labelOf={(p) => PRIORITIES[p]} readOnly={ro("priority")} />}
-      {show("assignee") && !skip("assignee", Boolean(value.assignee)) ? <Picker items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={(m) => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={(m) => m} labelOf={(m) => m} readOnly={ro("assignee")} /> : null}
-      {show("project") && !skip("project", Boolean(value.project)) ? <Picker items={options?.projects ?? (value.project ? [value.project] : [])} value={value.project} onPick={(p) => onChange({ ...value, project: p })} label="Project" lead={() => <ProjectGlyph />} keyOf={(p) => p} labelOf={(p) => p} readOnly={ro("project")} /> : null}
-      {show("labels") && !skip("labels", value.labels.length > 0) ? <Picker items={options?.labels ?? value.labels} value={value.labels} multi onPick={(l) => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter((x) => x !== l) : [...value.labels, l] })} label="Labels" lead={() => <LabelGlyph />} keyOf={(l) => l} labelOf={(l) => l} readOnly={ro("labels")} /> : null}
+      <Picker items={states} value={value.state} onPick={(s) => onChange({ ...value, state: s })} label="Status" lead={(s) => <StatusGlyph type={s?.type} />} keyOf={(s) => s.name} labelOf={(s) => s.name} emphasis />
+      <Picker items={[0, 1, 2, 3, 4]} value={value.priority} onPick={(p) => onChange({ ...value, priority: p })} label="Priority" lead={(p) => <PriorityGlyph p={p ?? 0} />} keyOf={(p) => String(p)} labelOf={(p) => PRIORITIES[p]} />
+      {show("assignee") ? <Picker items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={(m) => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={(m) => m} labelOf={(m) => m} /> : null}
+      {show("project") ? <Picker items={options?.projects ?? (value.project ? [value.project] : [])} value={value.project} onPick={(p) => onChange({ ...value, project: p })} label="Project" lead={() => <ProjectGlyph />} keyOf={(p) => p} labelOf={(p) => p} /> : null}
+      {show("labels") ? <Picker items={options?.labels ?? value.labels} value={value.labels} multi onPick={(l) => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter((x) => x !== l) : [...value.labels, l] })} label="Labels" lead={() => <LabelGlyph />} keyOf={(l) => l} labelOf={(l) => l} /> : null}
     </div>;
 }
-function CommentComposer({ identifier, draft, send }) {
+function CommentComposer({ identifier, draft, send, startOpen }) {
   const [text, setText] = useState2(draft ?? "");
-  const [open, setOpen] = useState2(Boolean(draft));
+  const [open, setOpen] = useState2(Boolean(draft) || Boolean(startOpen));
+  useEffect2(() => {
+    if (startOpen) setOpen(true);
+  }, [startOpen]);
   const [posting, setPosting] = useState2(false);
   useEffect2(() => {
     if (draft) {
@@ -277,9 +273,9 @@ function IssueCard({ ctx, note }) {
         </div>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, lineHeight: 1.35 }}>{issue.title}</h2>
         {issue.description ? <LongText md={issue.description} /> : null}
-        <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}><PropertyPills value={cur} options={issue.options} onChange={setCur} can={fu.has} /></div>
+        <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}><PropertyPills value={cur} options={issue.options} onChange={setCur} /></div>
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {dayShort(issue.createdAt)}{issue.completedAt ? ` \xB7 Done ${dayShort(issue.completedAt)}` : ""}</div> : null}
-        {fu.has("comment") ? <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} /> : null}
+        <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} startOpen={fu.picked("comment")} />
       </div>
       <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note} />
     </section>;
@@ -300,13 +296,11 @@ function NewIssueCard({ ctx }) {
       setProps(seed);
     }
   }, [seed]);
-  const fu = useFollowUps(draft?.followUps);
   if (!draft?.team) return <Placeholder text="No draft data." />;
   async function create() {
     setSent(true);
     await ctx.send(createMessage(draft.team, title.trim(), props, desc));
   }
-  const can = (id) => fu.has(id === "status" ? "state" : id);
   return <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
         <TeamChip k={draft.team} />
@@ -321,7 +315,7 @@ function NewIssueCard({ ctx }) {
         <div style={{ pointerEvents: sent ? "none" : "auto", opacity: sent ? 0.7 : 1 }}><PropertyPills value={props} options={draft.options} onChange={(p) => {
     touched.current = true;
     setProps(p);
-  }} can={can} /></div>
+  }} /></div>
       </div>
       <div style={footer}>
         <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear\u2026" : ""}</span>
@@ -329,15 +323,14 @@ function NewIssueCard({ ctx }) {
       </div>
     </section>;
 }
-function IssueRow({ issue, value, onChange, options, fields, onOpen, editable }) {
-  const ro = !editable;
+function IssueRow({ issue, value, onChange, options, fields, onOpen }) {
   return <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 8 }} {...hoverable}>
-      <Picker compact items={[0, 1, 2, 3, 4]} value={value.priority} onPick={(p) => onChange({ ...value, priority: p })} label="Priority" lead={(p) => <PriorityGlyph p={p ?? 0} />} keyOf={(p) => String(p)} labelOf={(p) => PRIORITIES[p]} readOnly={ro} />
+      <Picker compact items={[0, 1, 2, 3, 4]} value={value.priority} onPick={(p) => onChange({ ...value, priority: p })} label="Priority" lead={(p) => <PriorityGlyph p={p ?? 0} />} keyOf={(p) => String(p)} labelOf={(p) => PRIORITIES[p]} />
       <span style={{ ...muted, ...mono, fontSize: 12, width: 62, flexShrink: 0 }}>{issue.identifier}</span>
-      <Picker compact items={options?.states?.length ? options.states : DEFAULT_STATES} value={value.state} onPick={(s) => onChange({ ...value, state: s })} label="Status" lead={(s) => <StatusGlyph type={s?.type} />} keyOf={(s) => s.name} labelOf={(s) => s.name} readOnly={ro} />
+      <Picker compact items={options?.states?.length ? options.states : DEFAULT_STATES} value={value.state} onPick={(s) => onChange({ ...value, state: s })} label="Status" lead={(s) => <StatusGlyph type={s?.type} />} keyOf={(s) => s.name} labelOf={(s) => s.name} />
       <button type="button" onClick={() => onOpen(issue.identifier)} title={`Open ${issue.identifier}`} style={{ ...bare, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left", cursor: "pointer", fontSize: 14 }}>{issue.title}</button>
-      {fields.labels !== false && (editable || value.labels.length) ? <Picker compact items={options?.labels ?? value.labels} value={value.labels} multi onPick={(l) => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter((x) => x !== l) : [...value.labels, l] })} label="Labels" lead={() => value.labels.length ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}><LabelGlyph />{value.labels.length}</span> : <LabelGlyph />} keyOf={(l) => l} labelOf={(l) => l} readOnly={ro} /> : null}
-      {fields.assignee !== false && (editable || value.assignee) ? <Picker compact items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={(m) => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={(m) => m} labelOf={(m) => m} title={`Assignee: ${value.assignee ?? "none"}`} readOnly={ro} /> : null}
+      {fields.labels !== false ? <Picker compact items={options?.labels ?? value.labels} value={value.labels} multi onPick={(l) => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter((x) => x !== l) : [...value.labels, l] })} label="Labels" lead={() => value.labels.length ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}><LabelGlyph />{value.labels.length}</span> : <LabelGlyph />} keyOf={(l) => l} labelOf={(l) => l} /> : null}
+      {fields.assignee !== false ? <Picker compact items={options?.members ?? (value.assignee ? [value.assignee] : [])} value={value.assignee} onPick={(m) => onChange({ ...value, assignee: m })} label="Assignee" lead={() => <UserGlyph />} keyOf={(m) => m} labelOf={(m) => m} title={`Assignee: ${value.assignee ?? "none"}`} /> : null}
       {fields.dates !== false && issue.createdAt ? <span style={{ ...muted, fontSize: 12, flexShrink: 0, width: 44, textAlign: "right" }}>{dayShort(issue.createdAt)}</span> : null}
     </div>;
 }
@@ -418,25 +411,22 @@ function ComposedView({ ctx, note }) {
   const done = projIssues.filter((i) => stateOf(i).type === "completed").length;
   const inProgress = projIssues.filter((i) => stateOf(i).type === "started").length;
   const row_ = (i) => <div key={i.identifier}>
-      <IssueRow issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={(p) => setCur((c) => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} editable={fu.has("edit")} />
-      {openId === i.identifier ? <div style={{ margin: "2px 0 8px 30px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: { ...i, options: i.options ?? options, followUps: ["status", "priority", "comment"] } } }} /></div> : null}
+      <IssueRow issue={i} value={cur[i.identifier] ?? propsOf(i, states)} onChange={(p) => setCur((c) => ({ ...c, [i.identifier]: p }))} options={options} fields={comp.fields} onOpen={open} />
+      {openId === i.identifier ? <div style={{ margin: "2px 0 8px 30px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: { ...i, options: i.options ?? options, followUps: [] } } }} /></div> : null}
     </div>;
-  const anySwitch = fu.has("views") || fu.has("group") || fu.has("scopes") || fu.has("create");
-  const switcher = anySwitch ? <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+  const switcher = <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
       <span style={{ display: "inline-flex", gap: 2, alignItems: "center" }}>
-        {fu.has("views") ? <>
-          <Tab on={effectiveView === "list"} onClick={() => setView("list")}>List</Tab>
-          <Tab on={effectiveView === "board"} onClick={() => setView("board")}>Board</Tab>
-          {projectInfo ? <Tab on={effectiveView === "project"} onClick={() => setView("project")}>Project</Tab> : null}
-        </> : null}
-        {gb && fu.has("group") ? <Picker items={["status", "project", "assignee", "priority"]} value={groupBy} onPick={(g) => setGroupBy(g)} label="Group" lead={() => null} keyOf={(g) => g} labelOf={(g) => `by ${g}`} /> : null}
-        {fu.has("create") && options ? <Tab on={creating} onClick={() => setCreating((c) => !c)}>+ New issue</Tab> : null}
+        <Tab on={effectiveView === "list"} onClick={() => setView("list")}>List</Tab>
+        <Tab on={effectiveView === "board"} onClick={() => setView("board")}>Board</Tab>
+        {projectInfo ? <Tab on={effectiveView === "project"} onClick={() => setView("project")}>Project</Tab> : null}
+        {gb ? <Picker items={["status", "project", "assignee", "priority"]} value={groupBy} onPick={(g) => setGroupBy(g)} label="Group" lead={() => null} keyOf={(g) => g} labelOf={(g) => `by ${g}`} /> : null}
+        {fu.picked("create") && options ? <Tab on={creating} onClick={() => setCreating((c) => !c)}>+ New issue</Tab> : null}
       </span>
-      <span style={{ display: "inline-flex", gap: 2, alignItems: "center" }}>
-        {fu.has("scopes") ? ["open", "active", "done", "all"].map((sc) => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>) : null}
+      <span style={{ display: "inline-flex", gap: 2 }}>
+        {["open", "active", "done", "all"].map((sc) => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
       </span>
-    </div> : null;
-  const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options, followUps: ["priority", "project"] } } }} /> : null;
+    </div>;
+  const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options } } }} /> : null;
   const emptyNote = !issues.length ? <div style={{ ...muted, padding: "8px 8px 2px" }}>No {SCOPE_LABEL[scope].toLowerCase()} issues.</div> : null;
   return <section style={card}>
       <div style={{ ...pad, gap: 8 }}>
@@ -520,11 +510,9 @@ function Guests({ attendees, editing, value, onChange }) {
       {attendees.length > 8 ? <div style={muted}>+{attendees.length - 8} more</div> : null}
     </div>;
 }
-function EventCard({ ctx, event: given, note, followUps: givenFu }) {
+function EventCard({ ctx, event: given, note }) {
   const tz = ctx.details?.timeZone ?? "UTC";
   const event = given ?? ctx.details?.event;
-  const offered = givenFu ?? (Array.isArray(ctx.details?.followUps) ? ctx.details.followUps : Array.isArray(ctx.details?.composition?.followUps) ? ctx.details.composition.followUps : void 0);
-  const fu = useFollowUps(offered);
   const seed = useMemo2(() => ({ title: event?.title ?? "", start: wallOf(event?.start, tz), end: wallOf(event?.end, tz), location: event?.location ?? "", guests: (event?.attendees ?? []).map((a) => a.email).join(", ") }), [event]);
   const [saved, setSaved] = useState3(seed);
   const [cur, setCur] = useState3(seed);
@@ -564,31 +552,27 @@ function EventCard({ ctx, event: given, note, followUps: givenFu }) {
   const [ed, et] = cur.end.split(" ");
   const sameDay = sd === ed;
   const f = ctx.details?.composition?.fields ?? {};
-  const canEdit = fu.has("reschedule") || fu.has("guests") || fu.has("details");
-  const open = () => {
-    if (canEdit) setEditing(true);
-  };
-  const edTime = editing && fu.has("reschedule"), edGuests = editing && fu.has("guests"), edDetails = editing && fu.has("details");
+  const open = () => setEditing(true);
   return <section style={card}>
       <div style={pad}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <span style={{ marginTop: 5 }}><Dot color={event.color} /></span>
-          {edDetails ? <input style={{ ...bare, fontSize: 17, fontWeight: 500 }} value={cur.title} onChange={(e) => setCur({ ...cur, title: e.target.value })} aria-label="Title" /> : <h2 onClick={fu.has("details") ? open : void 0} title={fu.has("details") ? "Click to edit" : void 0} style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 500, lineHeight: 1.3, cursor: fu.has("details") ? "text" : "default" }}>{event.title}</h2>}
+          {editing ? <input style={{ ...bare, fontSize: 17, fontWeight: 500 }} value={cur.title} onChange={(e) => setCur({ ...cur, title: e.target.value })} aria-label="Title" /> : <h2 onClick={open} title="Click to edit" style={{ margin: 0, flex: 1, fontSize: 17, fontWeight: 500, lineHeight: 1.3, cursor: "text" }}>{event.title}</h2>}
           {event.link ? <OpenExternal url={event.link} title="Open in Google Calendar" onOpen={ctx.openUrl} /> : null}
         </div>
         <Line glyph={<ClockGlyph />}>
-          {edTime && !event.allDay ? <div style={{ ...row, gap: 6 }}>
+          {editing && !event.allDay ? <div style={{ ...row, gap: 6 }}>
               <input type="date" style={inputStyle} value={sd} onChange={(e) => setCur({ ...cur, start: `${e.target.value} ${st}`, end: sameDay ? `${e.target.value} ${et}` : cur.end })} aria-label="Date" />
               <input type="time" style={inputStyle} value={st} onChange={(e) => setCur({ ...cur, start: `${sd} ${e.target.value}` })} aria-label="Start time" />
               <span style={muted}>–</span>
               <input type="time" style={inputStyle} value={et} onChange={(e) => setCur({ ...cur, end: `${ed} ${e.target.value}` })} aria-label="End time" />
-            </div> : <span onClick={fu.has("reschedule") ? open : void 0} style={{ cursor: fu.has("reschedule") ? "text" : "default" }}>{fmtDay(wallOf(event.start, tz), true)}{event.allDay ? " \xB7 All day" : ` \xB7 ${timeRange(event, tz)}`}{event.recurring ? <span style={muted}> · Repeats</span> : null}</span>}
+            </div> : <span onClick={open} style={{ cursor: "text" }}>{fmtDay(wallOf(event.start, tz), true)}{event.allDay ? " \xB7 All day" : ` \xB7 ${timeRange(event, tz)}`}{event.recurring ? <span style={muted}> · Repeats</span> : null}</span>}
         </Line>
-        {edDetails || event.location || f.location !== false && fu.has("details") ? <Line glyph={<PinGlyph />}>{edDetails ? <input style={{ ...inputStyle, width: "100%" }} value={cur.location} onChange={(e) => setCur({ ...cur, location: e.target.value })} placeholder="Add location" aria-label="Location" /> : <span onClick={fu.has("details") ? open : void 0} style={{ cursor: fu.has("details") ? "text" : "default", ...event.location ? {} : muted }}>{event.location || "Add location"}</span>}</Line> : null}
+        {f.location !== false || editing || event.location ? <Line glyph={<PinGlyph />}>{editing ? <input style={{ ...inputStyle, width: "100%" }} value={cur.location} onChange={(e) => setCur({ ...cur, location: e.target.value })} placeholder="Add location" aria-label="Location" /> : <span onClick={open} style={{ cursor: "text", ...event.location ? {} : muted }}>{event.location || "Add location"}</span>}</Line> : null}
         {event.meet ? <Line glyph={<VideoGlyph />}><Button variant="primary" size="sm" onClick={() => ctx.openUrl(event.meet)}>Join with Google Meet</Button></Line> : null}
-        {edGuests || event.attendees.length || f.attendees !== false && fu.has("guests") ? <Line glyph={<UserGlyph />}><Guests attendees={event.attendees} editing={edGuests} value={cur.guests} onChange={(s) => setCur({ ...cur, guests: s })} /></Line> : null}
+        {f.attendees !== false || editing || event.attendees.length ? <Line glyph={<UserGlyph />}><Guests attendees={event.attendees} editing={editing} value={cur.guests} onChange={(s) => setCur({ ...cur, guests: s })} /></Line> : null}
         {event.description && f.description !== false ? <Line glyph={<NotesGlyph />}><LongText md={event.description} /></Line> : null}
-        {event.myResponse && !editing && fu.has("rsvp") ? <div style={{ ...row, fontSize: 13, paddingTop: 4, borderTop: `1px solid ${v("border")}` }}>
+        {event.myResponse && !editing ? <div style={{ ...row, fontSize: 13, paddingTop: 4, borderTop: `1px solid ${v("border")}` }}>
             <span style={muted}>Going?</span>
             {["yes", "no", "maybe"].map((a) => {
     const mine = a === "yes" && event.myResponse === "accepted" || a === "no" && event.myResponse === "declined" || a === "maybe" && event.myResponse === "tentative";
@@ -836,7 +820,7 @@ function EventRow({ e, tz, open, onToggle, ctx, fields }) {
         {e.myResponse === "needsAction" ? <span style={{ fontSize: 10, fontWeight: 600, color: v("warning") }}>RSVP</span> : null}
         {e.meet ? <span style={{ ...muted, display: "inline-flex" }}><VideoGlyph /></span> : null}
       </button>
-      {open ? <div style={{ margin: "2px 0 8px 28px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: e } }} event={e} followUps={["rsvp", "reschedule"]} /></div> : null}
+      {open ? <div style={{ margin: "2px 0 8px 28px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8 }}><EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: e } }} event={e} /></div> : null}
     </div>;
 }
 var CHIPS = [["today", "Today"], ["tomorrow", "Tomorrow"], ["rest_of_week", "This week"], ["next_week", "Next week"], ["this_month", "Month"], ["invites", "Invites"]];
@@ -904,13 +888,12 @@ function Agenda({ ctx, note }) {
     const w = (x) => wallOf(x.toISOString(), tz);
     return { start: w(t), end: w(new Date(t.getTime() + 30 * 6e4)) };
   })();
-  const creator = creating && writable.length ? <NewEventCard ctx={{ ...ctx, details: { kind: "draft", calendars: writable, draft: { title: "", start: nextSlot.start, end: nextSlot.end, allDay: false, attendees: [], meet: false, calendar: (writable.find((c) => c.primary) ?? writable[0]).id, followUps: ["guests", "meet"] } } }} onBack={() => setCreating(false)} backLabel="‹ Back" /> : null;
+  const creator = creating && writable.length ? <NewEventCard ctx={{ ...ctx, details: { kind: "draft", calendars: writable, draft: { title: "", start: nextSlot.start, end: nextSlot.end, allDay: false, attendees: [], meet: false, calendar: (writable.find((c) => c.primary) ?? writable[0]).id } } }} onBack={() => setCreating(false)} backLabel="‹ Back" /> : null;
   const t0 = d.timing;
   const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : "");
   const fields = comp.fields;
-  const anyChip = fu.has("ranges") || fu.has("find") || fu.has("create");
-  const chips = anyChip ? <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-      {fu.has("ranges") ? CHIPS.map(([k, label2]) => <Tab2 key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : mode === "agenda" && range === k)} onClick={() => {
+  const chips = <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+      {CHIPS.map(([k, label2]) => <Tab2 key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : mode === "agenda" && range === k)} onClick={() => {
     setOpenKey(null);
     if (k === "this_month") {
       setMode("month");
@@ -919,13 +902,13 @@ function Agenda({ ctx, note }) {
       setMode("agenda");
       setRange(k);
     }
-  }}>{label2}</Tab2>) : null}
-      {fu.has("find") ? <Tab2 on={mode === "free"} onClick={() => {
+  }}>{label2}</Tab2>)}
+      <Tab2 on={mode === "free"} onClick={() => {
     setOpenKey(null);
     setMode("free");
-  }}>Find a time</Tab2> : null}
-      {fu.has("create") && writable.length && mode !== "free" ? <Tab2 on={creating} onClick={() => setCreating((c) => !c)}>+ New event</Tab2> : null}
-    </div> : null;
+  }}>Find a time</Tab2>
+      {fu.picked("create") && writable.length && mode !== "free" ? <Tab2 on={creating} onClick={() => setCreating((c) => !c)}>+ New event</Tab2> : null}
+    </div>;
   if (mode === "free") {
     const free = d.free ?? freeFromEvents(all, tz, now, 30);
     const cals = (Array.isArray(d.calendars) ? d.calendars : []).filter((c) => c.writable);
@@ -977,7 +960,6 @@ function Agenda({ ctx, note }) {
 }
 function NewEventCard({ ctx, onBack, backLabel }) {
   const draft = ctx.details?.draft;
-  const fu = useFollowUps(draft?.followUps);
   const calendars = Array.isArray(ctx.details?.calendars) ? ctx.details.calendars : [];
   const seed = useMemo2(() => ({ title: draft?.title ?? "", start: draft?.start ?? "", end: draft?.end ?? "", allDay: Boolean(draft?.allDay), guests: (draft?.attendees ?? []).join(", "), location: draft?.location ?? "", meet: Boolean(draft?.meet), notes: draft?.description ?? "", calendar: calendars.find((c) => c.id === draft?.calendar) ?? calendars.find((c) => c.primary) ?? calendars[0] }), [draft]);
   const [s, setS] = useState3(seed);
@@ -1008,11 +990,11 @@ function NewEventCard({ ctx, onBack, backLabel }) {
             <label style={{ ...muted, display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, marginLeft: 4 }}><input type="checkbox" checked={s.allDay} onChange={(e) => set({ allDay: e.target.checked })} disabled={sent} />All day</label>
           </div>
         </Line>
-        {fu.has("guests") || s.guests ? <Line glyph={<UserGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.guests} onChange={(e) => set({ guests: e.target.value })} placeholder="Add guests (emails, comma-separated)" aria-label="Guests" disabled={sent} /></Line> : null}
-        {fu.has("meet") || s.meet ? <Line glyph={<VideoGlyph />}><label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}><input type="checkbox" checked={s.meet} onChange={(e) => set({ meet: e.target.checked })} disabled={sent} />Add Google Meet video conferencing</label></Line> : null}
-        {fu.has("location") || s.location ? <Line glyph={<PinGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.location} onChange={(e) => set({ location: e.target.value })} placeholder="Add location" aria-label="Location" disabled={sent} /></Line> : null}
-        {fu.has("notes") || s.notes ? <Line glyph={<NotesGlyph />}><textarea style={{ ...bare, lineHeight: "20px", fontSize: 13 }} rows={2} value={s.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="Add description" aria-label="Description" disabled={sent} /></Line> : null}
-        {calendars.length > 1 && fu.has("calendar") ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={(c) => set({ calendar: c })} label="Calendar" lead={(c) => <Dot color={c?.color} />} keyOf={(c) => c.id} labelOf={(c) => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
+        <Line glyph={<UserGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.guests} onChange={(e) => set({ guests: e.target.value })} placeholder="Add guests (emails, comma-separated)" aria-label="Guests" disabled={sent} /></Line>
+        <Line glyph={<VideoGlyph />}><label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}><input type="checkbox" checked={s.meet} onChange={(e) => set({ meet: e.target.checked })} disabled={sent} />Add Google Meet video conferencing</label></Line>
+        <Line glyph={<PinGlyph />}><input style={{ ...inputStyle, width: "100%" }} value={s.location} onChange={(e) => set({ location: e.target.value })} placeholder="Add location" aria-label="Location" disabled={sent} /></Line>
+        <Line glyph={<NotesGlyph />}><textarea style={{ ...bare, lineHeight: "20px", fontSize: 13 }} rows={2} value={s.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="Add description" aria-label="Description" disabled={sent} /></Line>
+        {calendars.length > 1 ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={(c) => set({ calendar: c })} label="Calendar" lead={(c) => <Dot color={c?.color} />} keyOf={(c) => c.id} labelOf={(c) => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
       </div>
       <div style={footer}>
         <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar\u2026" : ""}</span>
@@ -1079,7 +1061,7 @@ function AttachmentCard({ a, ctx }) {
       </div>
     </div>;
 }
-function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf, can }) {
+function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }) {
   const [hover, setHover] = useState4(false);
   const [open, setOpen] = useState4(false);
   const conv = convOf(m.channel);
@@ -1103,23 +1085,23 @@ function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf, can
           {m.attachments?.map((a, i) => <AttachmentCard key={i} a={a} ctx={ctx} />)}
           {m.files?.length ? <div style={{ ...muted, fontSize: 12 }}>📎 {m.files.map((f) => f.title ?? f.name).join(", ")}</div> : null}
           {fields.reactions && m.reactions.length || fields.threads && count ? <div style={{ ...row, marginTop: 4 }}>
-              {fields.reactions ? m.reactions.map((r) => <button key={r.name} type="button" onClick={can("react") ? () => sendReact(r.name) : void 0} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: can("react") ? "pointer" : "default" }}>{emoji(r.name)} {r.count}</button>) : null}
+              {fields.reactions ? m.reactions.map((r) => <button key={r.name} type="button" onClick={() => sendReact(r.name)} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: "pointer" }}>{emoji(r.name)} {r.count}</button>) : null}
               {fields.threads && count ? <button type="button" onClick={() => setOpen((o) => !o)} style={{ ...bare, width: "auto", fontSize: 12, color: v("accent"), fontWeight: 600, cursor: "pointer" }}>{open ? "Hide thread" : `${count} ${count === 1 ? "reply" : "replies"} \u203A`}</button> : null}
             </div> : null}
         </div>
-        {hover && (can("react") || can("reply") || m.permalink) ? <div style={{ position: "absolute", top: -10, right: 8, display: "inline-flex", gap: 2, padding: 2, borderRadius: 6, border: `1px solid ${v("border")}`, background: v("bg-elevated"), boxShadow: "0 2px 8px rgba(0,0,0,.08)" }}>
-            {can("react") ? QUICK.map((q) => <button key={q} type="button" onClick={() => sendReact(q)} title={`React :${q}:`} {...hoverable} style={{ ...bare, width: 26, height: 24, borderRadius: 4, cursor: "pointer", fontSize: 14 }}>{emoji(q)}</button>) : null}
-            {can("reply") ? <button type="button" onClick={() => setOpen(true)} title="Reply in thread" {...hoverable} style={{ ...bare, width: "auto", height: 24, padding: "0 6px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>Reply</button> : null}
+        {hover ? <div style={{ position: "absolute", top: -10, right: 8, display: "inline-flex", gap: 2, padding: 2, borderRadius: 6, border: `1px solid ${v("border")}`, background: v("bg-elevated"), boxShadow: "0 2px 8px rgba(0,0,0,.08)" }}>
+            {QUICK.map((q) => <button key={q} type="button" onClick={() => sendReact(q)} title={`React :${q}:`} {...hoverable} style={{ ...bare, width: 26, height: 24, borderRadius: 4, cursor: "pointer", fontSize: 14 }}>{emoji(q)}</button>)}
+            <button type="button" onClick={() => setOpen(true)} title="Reply in thread" {...hoverable} style={{ ...bare, width: "auto", height: 24, padding: "0 6px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>Reply</button>
             {m.permalink ? <OpenExternal url={m.permalink} title="Open in Slack" onOpen={ctx.openUrl} /> : null}
           </div> : null}
       </div>
       {open ? <div style={{ margin: "0 0 8px 44px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 2 }}>
-          {(replies ?? []).map((r) => <MessageRow key={r.ts} m={r} ctx={ctx} fields={{ reactions: fields.reactions, threads: false }} compact convOf={convOf} can={can} />)}
+          {(replies ?? []).map((r) => <MessageRow key={r.ts} m={r} ctx={ctx} fields={{ reactions: fields.reactions, threads: false }} compact convOf={convOf} />)}
           {count > (replies?.length ?? 0) ? <div style={{ ...muted, fontSize: 12, padding: "2px 8px" }}>{count - (replies?.length ?? 0)} older {count - (replies?.length ?? 0) === 1 ? "reply is" : "replies are"} in Slack{m.permalink ? "" : ""}.</div> : null}
-          {can("reply") ? <ComposeBox placeholder="Reply…" sendLabel="Reply" onSend={async (text) => {
+          <ComposeBox placeholder="Reply…" sendLabel="Reply" onSend={async (text) => {
     await ctx.send(`Reply in ${tgt} ${m.ts}:
 ${text}`);
-  }} /> : null}
+  }} />
         </div> : null}
     </div>;
 }
@@ -1180,7 +1162,6 @@ function ChannelView({ ctx, note }) {
   const all = Array.isArray(d.messages) ? d.messages : [];
   const comp = d.composition ?? { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
   const isThread = d.view === "thread" && d.threadTs;
-  const fu = useFollowUps(comp.followUps);
   if (!ch) return <Placeholder text="No conversation data." />;
   const { parents, repliesOf } = isThread ? { parents: all, repliesOf: /* @__PURE__ */ new Map() } : splitThreads(all);
   const days = /* @__PURE__ */ new Map();
@@ -1202,13 +1183,13 @@ function ChannelView({ ctx, note }) {
         {!parents.length ? <div style={{ ...muted, padding: "8px" }}>No messages in the last two weeks.</div> : null}
         {[...days.entries()].map(([k, items]) => <div key={k}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}><span style={{ flex: 1, height: 1, background: v("border") }} /><span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 12, border: `1px solid ${v("border")}` }}>{dayLabel(items[0].time)}</span><span style={{ flex: 1, height: 1, background: v("border") }} /></div>
-            {items.map((m, i) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={isThread ? { ...comp.fields, threads: false } : comp.fields} replies={repliesOf.get(m.ts)} compact={isThread && i > 0} convOf={convOf} can={fu.has} />)}
+            {items.map((m, i) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={isThread ? { ...comp.fields, threads: false } : comp.fields} replies={repliesOf.get(m.ts)} compact={isThread && i > 0} convOf={convOf} />)}
           </div>)}
-        {fu.has("compose") || d.draft ? <ComposeBox placeholder={isThread ? "Reply\u2026" : `Message ${convLabel(ch)}`} draft={d.draft} sendLabel={isThread ? "Reply" : "Send"} onSend={async (text) => {
+        <ComposeBox placeholder={isThread ? "Reply\u2026" : `Message ${convLabel(ch)}`} draft={d.draft} sendLabel={isThread ? "Reply" : "Send"} onSend={async (text) => {
     await ctx.send(isThread ? `Reply in ${tgt} ${d.threadTs}:
 ${text}` : `Post in ${tgt}:
 ${text}`);
-  }} /> : null}
+  }} />
       </div>
     </section>;
 }
@@ -1222,7 +1203,6 @@ function InboxView({ ctx, note }) {
   const [focus, setFocus] = useState4(comp.focus);
   const [range, setRange] = useState4(comp.range);
   const [openConv, setOpenConv] = useState4(null);
-  const fu = useFollowUps(comp.followUps);
   useEffect4(() => {
     setFocus(comp.focus);
     setRange(comp.range);
@@ -1244,11 +1224,11 @@ function InboxView({ ctx, note }) {
           <span style={{ fontSize: 15, fontWeight: 700 }}>{title} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{msgs.length} messages</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
-        {fu.has("focus") || fu.has("ranges") ? <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
-          {fu.has("focus") ? ["all", "mentions", "dms"].map((f) => <Tab3 key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>) : null}
+        <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
+          {["all", "mentions", "dms"].map((f) => <Tab3 key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>)}
           <span style={{ flex: 1 }} />
-          {fu.has("ranges") ? ["today", "3_days", "week", "2_weeks"].map((r) => <Tab3 key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL2[r]}</Tab3>) : null}
-        </div> : null}
+          {["today", "3_days", "week", "2_weeks"].map((r) => <Tab3 key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL2[r]}</Tab3>)}
+        </div>
         {!groups.length ? <div style={{ ...muted, padding: 8 }}>{focus === "mentions" ? "No mentions" : focus === "dms" ? "No direct messages" : "Nothing"} {(RANGE_LABEL2[range] ?? range).toLowerCase()}.</div> : null}
         {groups.map(([id, items]) => {
     const c = convOf(id);
@@ -1261,8 +1241,8 @@ function InboxView({ ctx, note }) {
                 <span style={{ fontSize: 13, fontWeight: 700 }}>{c ? convLabel(c) : `#${items[0].channelName}`} <span style={{ ...muted, fontWeight: 400 }}>{parents.length}</span>{items.some((m) => m.mentionsMe) ? <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "white", background: v("danger"), borderRadius: 8, padding: "1px 6px" }}>@</span> : null}</span>
                 <span style={{ ...muted, fontSize: 12 }}>{open ? "Collapse" : parents.length > 2 ? `${parents.length - 2} more \u203A` : "Open \u203A"}</span>
               </button>
-              {shown.map((m) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={repliesOf.get(m.ts)} compact convOf={convOf} can={fu.has} />)}
-              {open && fu.has("compose") ? <div style={{ padding: "4px 8px 2px" }}><ComposeBox placeholder={`Message ${c ? convLabel(c) : tgt}`} onSend={async (text) => {
+              {shown.map((m) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={repliesOf.get(m.ts)} compact convOf={convOf} />)}
+              {open ? <div style={{ padding: "4px 8px 2px" }}><ComposeBox placeholder={`Message ${c ? convLabel(c) : tgt}`} onSend={async (text) => {
       await ctx.send(`Post in ${tgt}:
 ${text}`);
     }} /></div> : null}
