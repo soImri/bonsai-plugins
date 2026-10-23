@@ -181,39 +181,96 @@ function MonthGrid({ ctx, caption }: { ctx: UiCtx; caption: string }) {
   );
 }
 
-/* ---------- FreeTime: Google Calendar's "Find a time" ---------- */
+/* ---------- FreeTime: Google Calendar's "Find a time" tab ---------- */
+type Slot = { date: string; weekday: string; start: string; end: string };
+const GRID = { start: 8, end: 19, rowPx: 34 }; // hours shown down the side
+const minsOf = (w: string) => { const [h, m] = (w.split(" ")[1] ?? "00:00").split(":").map(Number); return h * 60 + m; };
+const wallAt = (date: string, mins: number) => `${date} ${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+const hourLabel = (h: number) => `${((h + 11) % 12) + 1} ${h >= 12 ? "PM" : "AM"}`;
+
 function FreeTime({ ctx, caption }: { ctx: UiCtx; caption: string }) {
   const d = ctx.details ?? {};
   const f = d.free ?? {};
   const days: FreeDay[] = Array.isArray(f.days) ? f.days : [];
-  const wd = f.workday ?? { start: 9, end: 18 };
-  const span = (wd.end - wd.start) * 60;
-  const pct = (w: string) => { const [h, m] = (w.split(" ")[1] ?? "00:00").split(":").map(Number); return Math.max(0, Math.min(100, ((h * 60 + m - wd.start * 60) / span) * 100)); };
-  const suggestions = days.flatMap(day => day.free.slice(0, 2).map(s => ({ day, s }))).slice(0, 6);
-  const draft = (day: FreeDay, start: string) => { void ctx.send(`Draft an event on ${day.date} at ${start.split(" ")[1]} for ${f.slotMinutes ?? 30} minutes`); };
+  const today = (d.now ?? "").slice(0, 10);
+  const [duration, setDuration] = useState<number>(f.slotMinutes ?? 30);
+  const [page, setPage] = useState(0);
+  const [chosen, setChosen] = useState<Slot | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  useEffect(() => { setDuration(f.slotMinutes ?? 30); setChosen(null); setDrafting(false); setPage(0); }, [d]);
   if (!days.length) return <ErrorCard message="No working days in that range." />;
+  const perPage = 5;
+  const shown = days.slice(page * perPage, page * perPage + perPage);
+  const totalMins = (GRID.end - GRID.start) * 60;
+  const top = (w: string) => ((minsOf(w) - GRID.start * 60) / totalMins) * 100;
+  const height = (a: string, b: string) => ((minsOf(b) - minsOf(a)) / totalMins) * 100;
+  const fits = (day: FreeDay, startMin: number) => day.free.some(g => minsOf(g.start) <= startMin && startMin + duration <= minsOf(g.end));
+  const place = (day: FreeDay, e: React.MouseEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const mins = Math.round(((e.clientY - r.top) / r.height * totalMins + GRID.start * 60) / 15) * 15;
+    const start = Math.max(GRID.start * 60, Math.min(mins, GRID.end * 60 - duration));
+    setChosen({ date: day.date, weekday: day.weekday, start: wallAt(day.date, start), end: wallAt(day.date, start + duration) });
+  };
+  const suggested: Slot[] = (Array.isArray(f.suggested) ? f.suggested : []).map((s: Slot) => ({ ...s, end: wallAt(s.date, minsOf(s.start) + duration) }));
+  const chosenFits = chosen ? fits(days.find(x => x.date === chosen.date)!, minsOf(chosen.start)) : false;
+  // A stable draft object: NewEventCard re-seeds its state when this identity changes.
+  const draftDetails = useMemo(() => {
+    if (!chosen) return null;
+    const seed = f.seed ?? {};
+    const draft: Draft = { title: seed.title ?? "New event", start: chosen.start, end: chosen.end, allDay: false, attendees: [], meet: Boolean(seed.meet), calendar: f.calendars?.find((c: Cal) => c.primary)?.id, timeZone: d.timeZone };
+    return { ...d, kind: "draft", draft, calendars: f.calendars ?? [], picks: undefined };
+  }, [chosen?.start, chosen?.end, d]);
+  if (drafting && draftDetails) return <NewEventCard ctx={{ ...ctx, details: draftDetails }} onBack={() => setDrafting(false)} />;
   return (
-    <section style={card}>
-      <div style={{ ...pad, gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Find a time <span style={{ ...muted, fontWeight: 400 }}>{f.slotMinutes ?? 30} min · {wd.start}:00–{wd.end}:00</span></span>
-          <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+    <section style={{ ...card, maxWidth: 760 }}>
+      <div style={{ ...pad, gap: 10, paddingBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <span style={{ fontSize: 15, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 10 }}>Find a time
+            <Picker items={[15, 30, 45, 60, 90]} value={duration} onPick={m => { setDuration(m); setChosen(null); }} label="Duration" lead={() => <ClockGlyph />} keyOf={m => String(m)} labelOf={m => `${m} min`} />
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, ...muted, fontSize: 12 }}>
+            <span>{caption}</span>
+            {days.length > perPage ? <><Button variant="secondary" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)} aria-label="Earlier days">‹</Button><Button variant="secondary" size="sm" disabled={(page + 1) * perPage >= days.length} onClick={() => setPage(p => p + 1)} aria-label="Later days">›</Button></> : null}
+          </span>
         </div>
-        {days.map(day => (
-          <div key={day.date} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 54, flexShrink: 0, fontSize: 12 }}><span style={{ fontWeight: 600 }}>{day.weekday}</span> <span style={muted}>{fmtDay(day.date).split(", ")[1]}</span></div>
-            <div style={{ position: "relative", flex: 1, height: 22, borderRadius: 6, background: v("bg-subtle"), overflow: "hidden" }}>
-              {day.free.map(s => <button key={s.start} type="button" onClick={() => draft(day, s.start)} title={`Free ${fmtTime(s.start)} – ${fmtTime(s.end)} · click to draft an event`} style={{ ...bare, position: "absolute", top: 0, bottom: 0, left: `${pct(s.start)}%`, width: `${Math.max(1, pct(s.end) - pct(s.start))}%`, background: "color-mix(in srgb, var(--kay-color-success) 28%, transparent)", cursor: "pointer", fontSize: 10, color: v("text-primary"), overflow: "hidden", whiteSpace: "nowrap", textAlign: "left", paddingLeft: 4 }}>{fmtTime(s.start)}</button>)}
-              {day.busy.map((b, i) => <div key={i} title={`${b.title ?? "Busy"} · ${fmtTime(b.start)} – ${fmtTime(b.end)}`} style={{ position: "absolute", top: 3, bottom: 3, left: `${pct(b.start)}%`, width: `${Math.max(0.8, pct(b.end) - pct(b.start))}%`, borderRadius: 4, background: DEFAULT_COLOR, opacity: 0.85 }} />)}
+        {/* day headers */}
+        <div style={{ display: "grid", gridTemplateColumns: `52px repeat(${shown.length}, 1fr)`, gap: 0 }}>
+          <div />
+          {shown.map(day => (
+            <div key={day.date} style={{ textAlign: "center", padding: "2px 0 6px" }}>
+              <div style={{ ...muted, fontSize: 10, fontWeight: 600, letterSpacing: 0.5 }}>{day.weekday.toUpperCase()}</div>
+              <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 13, fontSize: 15, fontWeight: 500, background: day.date === today ? v("accent") : "transparent", color: day.date === today ? "white" : v("text-primary") }}>{Number(day.date.slice(8, 10))}</div>
             </div>
+          ))}
+        </div>
+        {/* the grid */}
+        <div style={{ display: "grid", gridTemplateColumns: `52px repeat(${shown.length}, 1fr)`, height: (GRID.end - GRID.start) * GRID.rowPx, borderTop: `1px solid ${v("border")}` }}>
+          <div style={{ position: "relative" }}>
+            {Array.from({ length: GRID.end - GRID.start }, (_, i) => <div key={i} style={{ position: "absolute", top: i * GRID.rowPx - 7, right: 8, ...muted, fontSize: 10 }}>{i === 0 ? "" : hourLabel(GRID.start + i)}</div>)}
           </div>
-        ))}
-        {suggestions.length ? (
-          <div style={{ ...row, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
-            <span style={{ ...muted, fontSize: 12 }}>Suggested</span>
-            {suggestions.map(({ day, s }) => <Button key={`${day.date}${s.start}`} variant="secondary" size="sm" onClick={() => draft(day, s.start)}>{day.weekday} {fmtTime(s.start)}</Button>)}
+          {shown.map(day => (
+            <div key={day.date} onClick={e => place(day, e)} title="Click to place the meeting" style={{ position: "relative", borderLeft: `1px solid ${v("border")}`, cursor: "crosshair", backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${GRID.rowPx - 1}px, ${v("border")} ${GRID.rowPx - 1}px, ${v("border")} ${GRID.rowPx}px)` }}>
+              {day.free.map(g => <div key={g.start} style={{ position: "absolute", left: 0, right: 0, top: `${top(g.start)}%`, height: `${height(g.start, g.end)}%`, background: "color-mix(in srgb, var(--kay-color-success) 10%, transparent)" }} />)}
+              {day.busy.map((b, i) => (
+                <div key={i} title={`${b.title ?? "Busy"} · ${fmtTime(b.start)} – ${fmtTime(b.end)}`} style={{ position: "absolute", left: 2, right: 2, top: `${top(b.start)}%`, height: `${Math.max(2, height(b.start, b.end))}%`, borderRadius: 4, background: DEFAULT_COLOR, color: "white", fontSize: 10, lineHeight: "13px", padding: "1px 4px", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", pointerEvents: "none" }}>{b.title ?? "Busy"}</div>
+              ))}
+              {chosen?.date === day.date ? (
+                <div style={{ position: "absolute", left: 2, right: 2, top: `${top(chosen.start)}%`, height: `${height(chosen.start, chosen.end)}%`, borderRadius: 4, border: `2px dashed ${chosenFits ? v("accent") : v("danger")}`, background: chosenFits ? "color-mix(in srgb, var(--kay-color-accent) 18%, transparent)" : "color-mix(in srgb, var(--kay-color-danger) 12%, transparent)", color: v("text-primary"), fontSize: 10, lineHeight: "13px", padding: "1px 4px", overflow: "hidden", whiteSpace: "nowrap", pointerEvents: "none" }}>{f.seed?.title ?? "New event"} · {fmtTime(chosen.start)}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        {/* suggested times, like Google's list */}
+        {suggested.length ? (
+          <div style={{ ...row, gap: 6 }}>
+            <span style={{ ...muted, fontSize: 12 }}>Suggested times</span>
+            {suggested.map(s => <Button key={`${s.date}${s.start}`} variant={chosen?.start === s.start ? "primary" : "secondary"} size="sm" onClick={() => setChosen(s)}>{s.weekday} {fmtDay(s.date).split(", ")[1]}, {fmtTime(s.start)}</Button>)}
           </div>
-        ) : <div style={{ ...muted, fontSize: 12 }}>No open slot of {f.slotMinutes ?? 30} minutes in working hours.</div>}
+        ) : <div style={{ ...muted, fontSize: 12 }}>No open {duration}-minute slot in working hours; click a day to place one anyway.</div>}
+      </div>
+      <div style={footer}>
+        <span style={{ fontSize: 13 }}>{chosen ? <>{fmtDay(chosen.date, true)} · {fmtTime(chosen.start)} – {fmtTime(chosen.end)}{chosenFits ? null : <span style={{ color: v("danger") }}> · overlaps something</span>}</> : <span style={muted}>Click a free spot or a suggested time.</span>}</span>
+        <Button variant="primary" size="sm" disabled={!chosen} onClick={() => setDrafting(true)}>Use this time</Button>
       </div>
     </section>
   );
@@ -270,7 +327,7 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
 }
 
 /* ---------- NewEventCard: Google Calendar's create dialog ---------- */
-function NewEventCard({ ctx }: { ctx: UiCtx }) {
+function NewEventCard({ ctx, onBack }: { ctx: UiCtx; onBack?: () => void }) {
   const draft: Draft | undefined = ctx.details?.draft;
   const calendars: Cal[] = Array.isArray(ctx.details?.calendars) ? ctx.details.calendars : [];
   const seed = useMemo(() => ({ title: draft?.title ?? "", start: draft?.start ?? "", end: draft?.end ?? "", allDay: Boolean(draft?.allDay), guests: (draft?.attendees ?? []).join(", "), location: draft?.location ?? "", meet: Boolean(draft?.meet), notes: draft?.description ?? "", calendar: calendars.find(c => c.id === draft?.calendar) ?? calendars.find(c => c.primary) ?? calendars[0] }), [draft]);
@@ -285,6 +342,7 @@ function NewEventCard({ ctx }: { ctx: UiCtx }) {
   return (
     <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
+        {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>‹ Find a time</button> : null}
         <input style={{ ...bare, fontSize: 18, fontWeight: 500, borderBottom: `1px solid ${v("border")}`, paddingBottom: 6 }} value={s.title} onChange={e => set({ title: e.target.value })} placeholder="Add title" aria-label="Title" disabled={sent} />
         <Line glyph={<ClockGlyph />}>
           <div style={{ ...row, gap: 6 }}>

@@ -34,6 +34,53 @@ const addMinutesWall = (start: string, minutes: number): string => {
 /** Working hours the free-time finder looks inside, as wall-clock hours in the calendar's zone. */
 const WORKDAY = { start: 9, end: 18 };
 
+/** "find 45 min for a call with Seb next week" → "Call with Seb"; anything else → "New event". */
+function titleFromAsk(task: string): string {
+  const STOP = /^(next|this|on|tomorrow|today|at|in|for|about|and|or|the|a|an|sometime|early|late|before|after)$/i;
+  const m = task.match(/\b((?:quick\s+)?(?:call|meeting|sync|chat|coffee|interview|review|catch[- ]?up|check[- ]?in|1:1|one on one|lunch|demo|walkthrough|session))\s+(?:with|w\/)\s+([A-Za-z][\w'-]*(?:\s+[A-Za-z][\w'-]*)?)/i);
+  if (m) {
+    const name = m[2].split(/\s+/).filter((w, i) => i === 0 || !STOP.test(w)).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+    return `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} with ${name}`;
+  }
+  const n = task.match(/\b(?:for|about)\s+(?:a|an|the)?\s*([a-z][\w' -]{2,40}?)(?:\s+(?:next|this|on|tomorrow|today|at|in)\b|$)/i);
+  return n ? n[1].trim().replace(/^\w/, (c) => c.toUpperCase()) : "New event";
+}
+
+/**
+ * Suggested starts, like Google's "Suggested times": every :00/:30 inside a free gap that fits the
+ * slot, scored to prefer mid-morning and early afternoon, a 15-minute buffer from busy blocks, and
+ * sooner days; at most two per day, six in all.
+ */
+const minsOfWall = (w: string) => { const [h, m] = (w.split(" ")[1] ?? "0:0").split(":").map(Number); return h * 60 + m; };
+function suggest(days: ReturnType<typeof freeSlots>, slotMin: number) {
+  const scored: { date: string; weekday: string; start: string; end: string; score: number }[] = [];
+  days.forEach((day, di) => {
+    for (const gap of day.free) {
+      const [gh, gm] = gap.start.split(" ")[1].split(":").map(Number); const [eh, em] = gap.end.split(" ")[1].split(":").map(Number);
+      const gapStart = gh * 60 + gm, gapEnd = eh * 60 + em;
+      for (let t = Math.ceil(gapStart / 30) * 30; t + slotMin <= gapEnd; t += 30) {
+        const h = t / 60;
+        let score = 0;
+        if (h >= 10 && h < 12) score += 3; else if (h >= 14 && h < 16) score += 2; else if (h >= 9 && h < 17) score += 1;
+        if (t - gapStart >= 15 && gapEnd - (t + slotMin) >= 15) score += 1; // breathing room
+        if (t % 60 === 0) score += 0.5;
+        score -= di * 0.4;
+        const hh = (n: number) => `${day.date} ${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+        scored.push({ date: day.date, weekday: day.weekday, start: hh(t), end: hh(t + slotMin), score });
+      }
+    }
+  });
+  // Best morning and best afternoon per day, so the list reads like Google's: a few distinct options, not six at 10:00.
+  const out: typeof scored = [];
+  for (const s of scored.sort((a, b) => b.score - a.score)) {
+    const mine = out.filter((o) => o.date === s.date);
+    const afternoon = minsOfWall(s.start) >= 12 * 60;
+    if (mine.length >= 2 || mine.some((o) => (minsOfWall(o.start) >= 12 * 60) === afternoon)) continue;
+    out.push(s); if (out.length >= 6) break;
+  }
+  return out.sort((a, b) => a.start.localeCompare(b.start)).map(({ date, weekday, start, end }) => ({ date, weekday, start, end }));
+}
+
 /** Each day's busy blocks and the open slots between them, within working hours, from now on. */
 function freeSlots(busy: Busy[], events: Event[], from: Date, to: Date, now: Date, tz: string, slotMin: number) {
   const days: { date: string; weekday: string; busy: { start: string; end: string; title?: string }[]; free: { start: string; end: string }[] }[] = [];
@@ -138,7 +185,8 @@ export const gcal = defineConnector({
       const busyMap = await freeBusy(token, calendars.map((c) => c.id), ff, ft, signal);
       const busy = Object.values(busyMap).flat();
       const slotMin = Number(task.match(/\b(\d{2,3})\s*(?:min|minutes)\b/i)?.[1] ?? (/\b(an? hour|1 ?h|60 ?min)\b/i.test(task) ? 60 : 30));
-      extra = { free: { days: freeSlots(busy, all, ff, ft, now, tz, slotMin), slotMinutes: slotMin, workday: WORKDAY, from: wall(ff.toISOString(), tz), to: wall(ft.toISOString(), tz) } };
+      const days = freeSlots(busy, all, ff, ft, now, tz, slotMin);
+      extra = { free: { days, suggested: suggest(days, slotMin), slotMinutes: slotMin, workday: WORKDAY, from: wall(ff.toISOString(), tz), to: wall(ft.toISOString(), tz), seed: { title: titleFromAsk(task), meet: /\b(call|zoom|meet|video|remote|online)\b/i.test(task) }, calendars: meta.calendars.filter((c) => c.writable).map((c) => ({ id: c.id, name: c.name, color: c.color, primary: c.primary })) } };
     }
     if (comp.view === "month") extra = { ...extra, month: { label: new Date(g.first.getTime() + 36e5 * 12).toLocaleDateString("en-US", { timeZone: tz, month: "long", year: "numeric" }), gridStart: wall(g.gridStart.toISOString(), tz).slice(0, 10), gridEnd: wall(g.gridEnd.toISOString(), tz).slice(0, 10), first: wall(g.first.toISOString(), tz).slice(0, 10), next: wall(g.next.toISOString(), tz).slice(0, 10) } };
     const payload = { kind: "view", task, timeZone: tz, now: wall(now.toISOString(), tz), rangeLabel, calendars: cals, events, composition: comp, ...extra, timing: { google: tGoogle, jev: tJev } };
