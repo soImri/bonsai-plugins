@@ -8,13 +8,13 @@
 
 | Screen in Slack | Composition | Fields shown | Fields that edit | A Send writes | Chat adaptation |
 | --- | --- | --- | --- | --- | --- |
-| Channel view | `channel` | header (#name, members, topic), day dividers, messages (avatar initials, name, time, text with bold/italic/code/quotes, files, reactions as pills, "N replies ›"), composer | the composer | `chat.postMessage` (`Post in #name:` + text) | Last 40 messages; hover shows quick reactions (✅ 👍 👀 🎉), Reply, open-in-Slack; a reaction pill click reacts (`React to #name <ts>: :emoji:`); "N replies" opens the thread card |
-| Thread | `thread` | the parent and its replies, reply composer | the reply composer | `chat.postMessage` with `thread_ts` (`Reply in #name <ts>:` + text) | Reply counts hidden inside a thread |
-| Activity / inbox | `inbox` | messages grouped by conversation, newest conversation first, mention badge, two most recent per conversation with "N more…" | none | — | Range and focus Jev-picked (today / 3 days / week; all / mentions / DMs); focus chips filter in the card when the loaded set allows, otherwise ask again; "Open ›" opens the channel card |
+| Channel view | `channel` | header (#name, members, topic), day dividers, messages (avatar initials, name, APP badge, time, text with bold/italic/code/quotes, app attachments as Slack unfurls, files, reactions as pills, "N replies ›"), composer | the composer, a reply box per thread | `chat.postMessage` (`Post in #name:` + text; `Reply in #name <ts>:` + text) | Two weeks loaded up front (search `in:#name`, replies included, merged with one history read when Slack's minute allows); threads open in place from the loaded replies; hover shows quick reactions (✅ 👍 👀 🎉), Reply, open-in-Slack |
+| Thread | `thread` (standalone, when the ask names a thread) | the parent and its replies, reply composer | the reply composer | `chat.postMessage` with `thread_ts` | Inside a channel or inbox card, threads open in place instead |
+| Activity / inbox | `inbox` | messages grouped by conversation, newest conversation first, mention badge, two most recent per conversation, "N more ›" expands the conversation with its composer | composers per expanded conversation, reply boxes per thread | `chat.postMessage` | Two weeks of everything loaded once (search `after:`); the All / Mentions / DMs and Today / 3 days / Week / 2 weeks chips filter in the card; Jev only picks the chips' starting positions |
 | Composer | `draft` | To (conversation picker), message box, ⌘↩ | all | `chat.postMessage` (`Post in #name:` or `Post in @person:` + text) | Jev picks the conversation from the ask against names and topics when the ask names none |
 
 **Jev picks (view):** range, focus, show threads, show reactions. **Jev picks (draft):** the conversation (up to 8 candidates).
 
-**Card messages:** `Post in #name:` + body · `Reply in #name <ts>:` + body · `React to #name <ts>: :emoji:` · `Show #name` · `Show thread <channelId>/<ts>`.
+**Card messages (writes only):** `Post in #name:` + body · `Reply in #name <ts>:` + body · `React to #name <ts>: :emoji:`.
 
-**Not built:** scheduling, pins, files (listed only), editing or deleting messages, opening new DMs, unread counts (Slack's API does not expose them cheaply), profile cards, threads inline inside the channel card (a thread read spends the minute; a layer-2 endpoint candidate).
+**Not built:** scheduling, pins, files (listed only), editing or deleting messages, opening new DMs, unread counts (Slack's API does not expose them cheaply), profile cards, paging past 100 messages or two weeks (a layer-2 endpoint candidate).

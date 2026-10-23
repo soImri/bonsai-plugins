@@ -13,6 +13,7 @@ type Event = { key: string; id: string; calendar: string; calendarName: string; 
 type Cal = { id: string; name: string; color?: string; writable?: boolean; primary?: boolean };
 type Composition = { view: "agenda" | "event" | "month" | "free"; range: string; fields: { attendees: boolean; location: boolean; description: boolean; past: boolean; invitesOnly?: boolean }; by: "jev" | "fallback" };
 type FreeDay = { date: string; weekday: string; busy: { start: string; end: string; title?: string }[]; free: { start: string; end: string }[] };
+type Slot = { date: string; weekday: string; start: string; end: string };
 type Draft = { title: string; description?: string; start: string; end: string; allDay: boolean; attendees: string[]; location?: string; meet: boolean; calendar?: string; calendarName?: string; timeZone: string };
 type Edit = { title: string; start: string; end: string; location: string; guests: string };
 
@@ -121,7 +122,7 @@ function EventCard({ ctx, event: given, note }: { ctx: UiCtx; event?: Event; not
           </div>
         ) : null}
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Google Calendar…" onDiscard={() => { setCur(saved); setEditing(false); }} onSave={save} note={note ?? (ctx.details?.timing?.google ? `Google ${ctx.details.timing.google}` : undefined)} />
+      <SaveBar count={changes.length} saving={saving} savingText="Saving to Google Calendar…" onDiscard={() => { setCur(saved); setEditing(false); }} onSave={save} note={note} />
     </section>
   );
 }
@@ -191,8 +192,38 @@ function MonthGrid({ ctx, caption, month, events, onPrev, onNext, canPrev, canNe
   );
 }
 
+/* ---------- free time from the loaded events (the same rule as the agent side: working hours, weekdays, from now) ---------- */
+const WORKDAY = { start: 9, end: 18 };
+function freeFromEvents(all: Event[], tz: string, now: string, slotMin: number) {
+  const today = now.slice(0, 10);
+  const days: FreeDay[] = [];
+  const nowMin = minsOf(now);
+  for (let i = 0, d = today; days.length < 10 && i < 21; i++, d = addDays(today, i)) {
+    const wd = weekdayOf(d);
+    if (wd === 0 || wd === 6) continue;
+    const dayStartMin = d === today ? Math.max(WORKDAY.start * 60, Math.ceil(nowMin / 15) * 15) : WORKDAY.start * 60;
+    const dayEnd = WORKDAY.end * 60;
+    if (dayEnd <= dayStartMin) continue;
+    const busyRaw = all.filter(e => !e.allDay && e.myResponse !== "declined" && wallOf(e.start, tz).slice(0, 10) <= d && wallOf(e.end, tz).slice(0, 10) >= d).map(e => ({ s: wallOf(e.start, tz).slice(0, 10) < d ? 0 : minsOf(wallOf(e.start, tz)), e: wallOf(e.end, tz).slice(0, 10) > d ? 1440 : minsOf(wallOf(e.end, tz)), title: e.title })).filter(b => b.e > dayStartMin && b.s < dayEnd).sort((a, b) => a.s - b.s);
+    const merged: typeof busyRaw = [];
+    for (const b of busyRaw) { const last = merged[merged.length - 1]; if (last && b.s <= last.e) last.e = Math.max(last.e, b.e); else merged.push({ ...b }); }
+    const free: { start: string; end: string }[] = [];
+    let cursor = dayStartMin;
+    for (const b of [...merged, { s: dayEnd, e: dayEnd, title: "" }]) { if (b.s - cursor >= slotMin) free.push({ start: wallAt(d, cursor), end: wallAt(d, b.s) }); cursor = Math.max(cursor, b.e); }
+    days.push({ date: d, weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wd], busy: merged.map(b => ({ start: wallAt(d, Math.max(b.s, dayStartMin)), end: wallAt(d, Math.min(b.e, dayEnd)), title: b.title })), free });
+  }
+  const suggested: Slot[] = [];
+  days.forEach((day, di) => {
+    const picks: { start: number; score: number }[] = [];
+    for (const g of day.free) { const gs = minsOf(g.start), ge = minsOf(g.end); for (let t = Math.ceil(gs / 30) * 30; t + slotMin <= ge; t += 30) { const h = t / 60; let score = h >= 10 && h < 12 ? 3 : h >= 14 && h < 16 ? 2 : h >= 9 && h < 17 ? 1 : 0; if (t - gs >= 15 && ge - (t + slotMin) >= 15) score += 1; if (t % 60 === 0) score += 0.5; score -= di * 0.4; picks.push({ start: t, score }); } }
+    const best = picks.sort((a, b) => b.score - a.score);
+    const am = best.find(p => p.start < 720), pm = best.find(p => p.start >= 720);
+    for (const p of [am, pm]) if (p) suggested.push({ date: day.date, weekday: day.weekday, start: wallAt(day.date, p.start), end: wallAt(day.date, p.start + slotMin) });
+  });
+  return { days, suggested: suggested.sort((a, b) => a.start.localeCompare(b.start)).slice(0, 6), slotMinutes: slotMin, workday: WORKDAY };
+}
+
 /* ---------- FreeTime: Google Calendar's "Find a time" tab ---------- */
-type Slot = { date: string; weekday: string; start: string; end: string };
 const GRID = { start: 8, end: 19, rowPx: 34 }; // hours shown down the side
 const minsOf = (w: string) => { const [h, m] = (w.split(" ")[1] ?? "00:00").split(":").map(Number); return h * 60 + m; };
 const wallAt = (date: string, mins: number) => `${date} ${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
@@ -347,15 +378,19 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   useEffect(() => { setRange(initialRange); setMode(comp.view === "month" ? "month" : comp.view === "free" ? "free" : "agenda"); setMonthIx(comp.range === "next_month" ? 1 : 0); setOpenKey(null); }, [d]);
   const t0 = d.timing as Record<string, string> | undefined;
-  const caption = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t0?.google ? ` · Google ${t0.google}` : ""}${t0?.jev ? ` · Jev ${t0.jev}` : ""}`);
+  const caption = note ?? (d.applied ? `Saved · ${d.applied.join(" · ")}` : "");
   const fields = comp.fields;
   const chips = (
     <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
       {CHIPS.map(([k, label]) => <Tab key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : (mode === "agenda" && range === k))} onClick={() => { setOpenKey(null); if (k === "this_month") { setMode("month"); setMonthIx(0); } else { setMode("agenda"); setRange(k); } }}>{label}</Tab>)}
-      <Tab on={mode === "free"} onClick={() => { if (d.free) setMode("free"); else void ctx.send("When am I free this week?"); }}>Find a time</Tab>
+      <Tab on={mode === "free"} onClick={() => { setOpenKey(null); setMode("free"); }}>Find a time</Tab>
     </div>
   );
-  if (mode === "free" && d.free) return <FreeTime ctx={ctx} caption={caption} chips={chips} />;
+  if (mode === "free") {
+    const free = d.free ?? freeFromEvents(all, tz, now, 30);
+    const cals = (Array.isArray(d.calendars) ? d.calendars : []).filter((c: Cal) => c.writable);
+    return <FreeTime ctx={{ ...ctx, details: { ...d, free: { ...free, seed: free.seed ?? { title: "New event", meet: false }, calendars: free.calendars ?? cals } } }} caption={caption} chips={chips} />;
+  }
   if (mode === "month" && months[monthIx]) {
     const m = months[monthIx];
     const inGrid = all.filter(e => inRange(e, tz, m.gridStart, m.gridEnd));
@@ -434,7 +469,7 @@ function NewEventCard({ ctx, onBack }: { ctx: UiCtx; onBack?: () => void }) {
         {calendars.length > 1 ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={c => set({ calendar: c })} label="Calendar" lead={c => <Dot color={c?.color} />} keyOf={c => c.id} labelOf={c => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar…" : ctx.details?.picks ? <>{ctx.details.picks.by === "jev" ? "Options picked by Jev" : "Default options"} · <Timing t={ctx.details.timing} labels={TIMING} /></> : ""}</span>
+        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar…" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !s.title.trim() || !sd} onClick={create}>{sent ? "Saving…" : "Save"}</Button>
       </div>
     </section>

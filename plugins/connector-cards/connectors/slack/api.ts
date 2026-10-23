@@ -14,9 +14,12 @@ const HISTORY_WINDOW_MS = 60_000;
 export type Channel = { id: string; name: string; kind: "channel" | "private" | "dm" | "group"; topic?: string; members?: number; userId?: string; isMember?: boolean };
 export type Person = { id: string; name: string; display: string; initials: string; title?: string; bot?: boolean };
 export type Reaction = { name: string; count: number; mine: boolean };
+/** An app/bot attachment or link unfurl, in Slack's own shape: a colour bar, a title (linked), text, fields, a footer. */
+export type Attachment = { title?: string; link?: string; text?: string; pretext?: string; color?: string; footer?: string; author?: string; fields?: { title?: string; value: string }[]; image?: string };
 export type Message = {
   ref: string; channel: string; channelName: string; ts: string; threadTs?: string; time: string;
-  userId?: string; user: string; initials: string; text: string; raw: string;
+  userId?: string; user: string; initials: string; bot?: boolean; text: string; raw: string;
+  attachments: Attachment[];
   reactions: Reaction[]; replyCount: number; permalink?: string; mentionsMe: boolean; edited?: boolean; files?: { name: string; title?: string }[];
 };
 export type Meta = { at: number; me: string; people: Record<string, Person>; channels: Channel[] };
@@ -90,15 +93,55 @@ export function plainText(raw: string, people: Record<string, Person>, channels:
     .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 }
 
+/** Block Kit → text: section/context/header text, rich_text runs, with mrkdwn kept for the renderer. */
+function blocksText(blocks: any[]): string {
+  const out: string[] = [];
+  const rich = (els: any[]): string => els.map((e) => e.type === "text" ? (e.style?.bold ? `*${e.text}*` : e.style?.code ? `\`${e.text}\`` : e.text) : e.type === "link" ? (e.text ? `<${e.url}|${e.text}>` : `<${e.url}>`) : e.type === "user" ? `<@${e.user_id}>` : e.type === "channel" ? `<#${e.channel_id}>` : e.type === "emoji" ? `:${e.name}:` : e.type === "broadcast" ? `<!${e.range}>` : "").join("");
+  for (const b of blocks ?? []) {
+    if (b.type === "section") { if (b.text?.text) out.push(b.text.text); for (const f of b.fields ?? []) if (f.text) out.push(f.text); }
+    else if (b.type === "header" && b.text?.text) out.push(`*${b.text.text}*`);
+    else if (b.type === "context") out.push((b.elements ?? []).map((e: any) => e.text ?? "").filter(Boolean).join(" "));
+    else if (b.type === "rich_text") out.push((b.elements ?? []).map((el: any) => el.type === "rich_text_list" ? (el.elements ?? []).map((li: any) => `• ${rich(li.elements ?? [])}`).join("\n") : el.type === "rich_text_quote" ? `> ${rich(el.elements ?? [])}` : el.type === "rich_text_preformatted" ? `\`\`\`${rich(el.elements ?? [])}\`\`\`` : rich(el.elements ?? [])).join("\n"));
+  }
+  return out.filter(Boolean).join("\n");
+}
+
+function normalizeAttachment(a: any, meta: Meta): Attachment | undefined {
+  let text: string = a.text ?? (Array.isArray(a.blocks) ? blocksText(a.blocks) : "");
+  let title: string | undefined = a.title;
+  let link: string | undefined = a.title_link ?? a.from_url ?? a.original_url;
+  // Block Kit attachments (Linear, GitHub…) open with a linked title line rather than a title field.
+  if (!title) { const m = text.match(/^\s*<(https?:\/\/[^|>]+)\|([^>]+)>\s*\n?/); if (m) { link ??= m[1]; title = m[2]; text = text.slice(m[0].length); } }
+  // Trailing "App | 2 hours ago" lines are Slack's context row, not content.
+  text = text.replace(/\n[^\n]{0,40}\|[^\n]{0,40}$/, "").trim();
+  const att: Attachment = {
+    ...(title ? { title: plainText(title, meta.people, meta.channels) } : {}), ...(link ? { link } : {}),
+    ...(text ? { text: plainText(String(text).slice(0, 600), meta.people, meta.channels) } : {}), ...(a.pretext ? { pretext: plainText(a.pretext, meta.people, meta.channels) } : {}),
+    ...(a.color ? { color: a.color.startsWith("#") ? a.color : `#${a.color}` } : {}), ...(a.footer ? { footer: plainText(a.footer, meta.people, meta.channels) } : a.service_name ? { footer: a.service_name } : {}),
+    ...(a.author_name ? { author: a.author_name } : {}), ...(Array.isArray(a.fields) && a.fields.length ? { fields: a.fields.slice(0, 6).map((f: any) => ({ ...(f.title ? { title: f.title } : {}), value: plainText(String(f.value ?? ""), meta.people, meta.channels) })) } : {}),
+    ...(a.image_url ?? a.thumb_url ? { image: a.image_url ?? a.thumb_url } : {}),
+  };
+  return att.title || att.text || att.pretext || att.fields ? att : undefined;
+}
+
 export function normalizeMessage(m: any, channel: Channel, meta: Meta): Message {
   const person = meta.people[m.user] ?? (m.username ? { id: m.user ?? "", name: m.username, display: m.username, initials: initialsOf(m.username) } : undefined);
-  const user = person?.display ?? (m.bot_profile?.name ?? "Unknown");
-  const raw: string = m.text ?? "";
+  const bot = Boolean(m.subtype === "bot_message" || (m.bot_id && !m.user) || person?.bot);
+  const attachments = (Array.isArray(m.attachments) ? m.attachments : []).map((a: any) => normalizeAttachment(a, meta)).filter(Boolean) as Attachment[];
+  // An app's name comes from its bot profile or username; Linear-style webhook posts carry neither, so the attachment's footer or the link's host stands in.
+  const appName = m.bot_profile?.name ?? m.username ?? attachments.find((a) => a.footer)?.footer ?? (attachments.find((a) => a.link)?.link?.match(/^https?:\/\/(?:www\.)?([^./]+)/)?.[1]);
+  const user = person?.display ?? (bot ? (appName ? appName[0].toUpperCase() + appName.slice(1) : "App") : "Unknown");
+  // Search results carry no thread_ts field; the permalink of a reply has ?thread_ts=<parent>.
+  const fromLink = typeof m.permalink === "string" ? m.permalink.match(/[?&]thread_ts=(\d{10}\.\d{6})/)?.[1] : undefined;
+  const parent = m.thread_ts ?? fromLink;
+  const threadTs = parent && parent !== m.ts ? parent : undefined;
+  // Bots put their content in blocks or attachments; the text field is often empty or a fallback line.
+  const raw: string = m.text || (Array.isArray(m.blocks) && m.blocks.length ? blocksText(m.blocks) : "") || (attachments.length ? "" : (m.attachments?.[0]?.fallback ?? ""));
   return {
-    ref: `${channel.id}/${m.ts}`, channel: channel.id, channelName: channel.name, ts: m.ts, ...(m.thread_ts && m.thread_ts !== m.ts ? { threadTs: m.thread_ts } : {}),
+    ref: `${channel.id}/${m.ts}`, channel: channel.id, channelName: channel.name, ts: m.ts, ...(threadTs ? { threadTs } : {}),
     time: new Date(Number(m.ts) * 1000).toISOString(),
-    ...(m.user ? { userId: m.user } : {}), user, initials: person?.initials ?? initialsOf(user),
-    text: plainText(raw, meta.people, meta.channels), raw,
+    ...(m.user ? { userId: m.user } : {}), user, initials: person?.initials ?? initialsOf(user), ...(bot ? { bot: true } : {}),
+    text: plainText(raw, meta.people, meta.channels), raw, attachments,
     reactions: (m.reactions ?? []).map((r: any) => ({ name: r.name, count: r.count, mine: (r.users ?? []).includes(meta.me) })),
     replyCount: m.reply_count ?? 0, ...(m.permalink ? { permalink: m.permalink } : {}),
     mentionsMe: raw.includes(`<@${meta.me}>`) || /<!(channel|here|everyone)>/.test(raw), ...(m.edited ? { edited: true } : {}),
@@ -109,37 +152,41 @@ export function normalizeMessage(m: any, channel: Channel, meta: Meta): Message 
 /* ---------- the one-per-minute history budget, tracked per method in this process ---------- */
 const lastRead: Record<string, number> = {};
 const budgetFree = (method: string) => Date.now() - (lastRead[method] ?? 0) >= HISTORY_WINDOW_MS;
+const dedupe = (ms: Message[]) => { const seen = new Set<string>(); return ms.filter((m) => (seen.has(m.ref) ? false : (seen.add(m.ref), true))).sort((a, b) => a.ts.localeCompare(b.ts)); };
+const afterDate = (days: number) => new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
 
-/** Recent messages in one channel: history when the minute is free, else search `in:#name`. */
-export async function readChannel(token: string, meta: Meta, channel: Channel, limit: number, signal?: AbortSignal): Promise<{ messages: Message[]; via: "history" | "search" }> {
-  if (budgetFree("conversations.history")) {
-    try {
-      lastRead["conversations.history"] = Date.now();
-      const r = await slack(token, "conversations.history", { channel: channel.id, limit }, signal);
-      return { messages: (r.messages ?? []).filter((m: any) => !m.subtype || m.subtype === "thread_broadcast" || m.subtype === "bot_message").map((m: any) => normalizeMessage(m, channel, meta)).reverse(), via: "history" };
-    } catch (err) { if (!(err instanceof SlackError && err.code === "ratelimited")) throw err; }
-  }
-  const q = channel.kind === "dm" ? `with:@${meta.people[channel.userId ?? ""]?.name ?? ""}` : `in:#${channel.name}`;
-  const r = await slack(token, "search.messages", { query: q, sort: "timestamp", sort_dir: "desc", count: limit }, signal);
-  return { messages: (r.messages?.matches ?? []).map((m: any) => normalizeMessage(m, channel, meta)).reverse(), via: "search" };
+async function searchMessages(token: string, meta: Meta, query: string, limit: number, signal?: AbortSignal): Promise<Message[]> {
+  const r = await slack(token, "search.messages", { query, sort: "timestamp", sort_dir: "desc", count: Math.min(limit, 100) }, signal);
+  return (r.messages?.matches ?? []).map((m: any) => {
+    const ch: Channel = meta.channels.find((c) => c.id === m.channel?.id) ?? { id: m.channel?.id ?? "?", name: m.channel?.name ?? "?", kind: m.channel?.is_im ? "dm" : m.channel?.is_mpim ? "group" : m.channel?.is_private ? "private" : "channel" };
+    return normalizeMessage(m, ch, meta);
+  });
 }
 
+/**
+ * A channel's last two weeks, replies included: search `in:#name` (its own budget, returns thread
+ * replies too) merged with one history read when the minute is free (exact recent ordering, every
+ * subtype). The card then opens threads and pages days without another call.
+ */
+export async function readChannel(token: string, meta: Meta, channel: Channel, days: number, signal?: AbortSignal): Promise<{ messages: Message[]; via: string }> {
+  const q = channel.kind === "dm" ? `with:@${meta.people[channel.userId ?? ""]?.name ?? ""} after:${afterDate(days)}` : `in:#${channel.name} after:${afterDate(days)}`;
+  const [searched, recent] = await Promise.all([
+    searchMessages(token, meta, q, 100, signal).catch((err) => { if (err instanceof SlackError && err.code === "ratelimited") return [] as Message[]; throw err; }),
+    budgetFree("conversations.history") ? (async () => { lastRead["conversations.history"] = Date.now(); try { const r = await slack(token, "conversations.history", { channel: channel.id, limit: 50 }, signal); return (r.messages ?? []).filter((m: any) => !m.subtype || m.subtype === "thread_broadcast" || m.subtype === "bot_message").map((m: any) => normalizeMessage(m, channel, meta)); } catch (err) { if (err instanceof SlackError && err.code === "ratelimited") return []; throw err; } })() : Promise.resolve([] as Message[]),
+  ]);
+  return { messages: dedupe([...searched, ...recent]), via: recent.length ? "history+search" : "search" };
+}
+
+/** One thread in full (spends the replies minute). */
 export async function readThread(token: string, meta: Meta, channel: Channel, ts: string, signal?: AbortSignal): Promise<Message[]> {
   lastRead["conversations.replies"] = Date.now();
   const r = await slack(token, "conversations.replies", { channel: channel.id, ts, limit: 100 }, signal);
   return (r.messages ?? []).map((m: any) => normalizeMessage(m, channel, meta));
 }
 
-/** Recent activity across the workspace via search (its own budget): a date window, optionally mentions or DMs only. */
-export async function readInbox(token: string, meta: Meta, opts: { after: string; mentionsOnly?: boolean; dmsOnly?: boolean; query?: string; limit?: number }, signal?: AbortSignal): Promise<Message[]> {
-  const parts = [opts.query ?? "", `after:${opts.after}`];
-  if (opts.mentionsOnly) parts.push(`<@${meta.me}>`);
-  if (opts.dmsOnly) parts.push("is:dm");
-  const r = await slack(token, "search.messages", { query: parts.filter(Boolean).join(" "), sort: "timestamp", sort_dir: "desc", count: opts.limit ?? 50 }, signal);
-  return (r.messages?.matches ?? []).map((m: any) => {
-    const ch: Channel = meta.channels.find((c) => c.id === m.channel?.id) ?? { id: m.channel?.id ?? "?", name: m.channel?.name ?? "?", kind: m.channel?.is_im ? "dm" : "channel" };
-    return normalizeMessage(m, ch, meta);
-  });
+/** Everything the person can see from the last `days` days, replies included; the card filters by focus and range itself. */
+export async function readInbox(token: string, meta: Meta, days: number, query: string | undefined, signal?: AbortSignal): Promise<Message[]> {
+  return dedupe(await searchMessages(token, meta, `${query ?? ""} after:${afterDate(days)}`.trim(), 100, signal));
 }
 
 /* ---------- writes ---------- */

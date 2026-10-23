@@ -31,11 +31,6 @@ function ErrorCard({ message }) {
 function Placeholder({ text }) {
   return <div style={{ ...card, ...pad, ...muted }}>{text}</div>;
 }
-function Timing({ t, labels }) {
-  if (!t) return null;
-  const parts = Object.entries(t).filter(([k]) => k !== "total").map(([k, val]) => `${labels?.[k] ?? k[0].toUpperCase() + k.slice(1)} ${val}`);
-  return parts.length ? <span>{parts.join(" \xB7 ")}</span> : null;
-}
 var OpenGlyph = () => <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3H3.5A1.5 1.5 0 0 0 2 4.5v7A1.5 1.5 0 0 0 3.5 13h7a1.5 1.5 0 0 0 1.5-1.5V9M9 2h4v4M13 2L7 8" /></svg>;
 var UserGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="4.5" r="2.6" fill="currentColor" /><path d="M2 12.5c.6-2.9 2.4-4.3 5-4.3s4.4 1.4 5 4.3z" fill="currentColor" /></svg>;
 var PinGlyph = () => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M7 13s4-3.9 4-7A4 4 0 0 0 3 6c0 3.1 4 7 4 7z" /><circle cx="7" cy="6" r="1.4" /></svg>;
@@ -158,7 +153,6 @@ import { useEffect as useEffect2, useMemo, useRef as useRef2, useState as useSta
 var PRIORITIES = ["No priority", "Urgent", "High", "Medium", "Low"];
 var DEFAULT_STATES = [{ name: "Backlog", type: "backlog" }, { name: "Todo", type: "unstarted" }, { name: "In Progress", type: "started" }, { name: "In Review", type: "started" }, { name: "Done", type: "completed" }, { name: "Canceled", type: "canceled" }];
 var STATE_ORDER = ["started", "unstarted", "backlog", "completed", "canceled"];
-var TIMING = { linear: "Linear", jev: "Jev" };
 var propsOf = (i, states) => ({ state: states.find((s) => s.name === i.state?.name) ?? i.state, priority: i.priority ?? 0, assignee: i.assignee, project: i.project, labels: i.labels ?? [] });
 function diff(a, b) {
   const out = [];
@@ -270,7 +264,7 @@ function IssueCard({ ctx, note }) {
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {dayShort(issue.createdAt)}{issue.completedAt ? ` \xB7 Done ${dayShort(issue.completedAt)}` : ""}</div> : null}
         <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} />
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note ?? (ctx.details?.timing?.linear ? `Linear ${ctx.details.timing.linear}` : void 0)} />
+      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note} />
     </section>;
 }
 function NewIssueCard({ ctx }) {
@@ -311,7 +305,7 @@ function NewIssueCard({ ctx }) {
   }} /></div>
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear\u2026" : ctx.details?.picks ? <>{ctx.details.picks.by === "jev" ? "Fields picked by Jev" : "Default fields"} · <Timing t={ctx.details.timing} labels={TIMING} /></> : ""}</span>
+        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear\u2026" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !title.trim()} onClick={create}>{sent ? "Creating\u2026" : "Create issue"}</Button>
       </div>
     </section>;
@@ -451,7 +445,6 @@ var linearUi = { id: "linear", label: "Linear", component: LinearUi, runningText
 
 // connectors/gcal/ui.tsx
 import { useEffect as useEffect3, useMemo as useMemo2, useRef as useRef3, useState as useState3 } from "react";
-var TIMING2 = { google: "Google", jev: "Jev" };
 var RANGE_LABEL = { today: "Today", tomorrow: "Tomorrow", rest_of_week: "This week", next_week: "Next week", next_7_days: "Next 7 days", next_14_days: "Next 14 days", yesterday: "Yesterday", past_week: "Past week", this_month: "This month", next_month: "Next month", day: "Day" };
 var DEFAULT_COLOR = "#039be5";
 function wallOf(iso, tz) {
@@ -573,7 +566,7 @@ function EventCard({ ctx, event: given, note }) {
       <SaveBar count={changes.length} saving={saving} savingText="Saving to Google Calendar…" onDiscard={() => {
     setCur(saved);
     setEditing(false);
-  }} onSave={save} note={note ?? (ctx.details?.timing?.google ? `Google ${ctx.details.timing.google}` : void 0)} />
+  }} onSave={save} note={note} />
     </section>;
 }
 var addDays = (ymd, n) => {
@@ -648,6 +641,52 @@ function MonthGrid({ ctx, caption, month, events, onPrev, onNext, canPrev, canNe
           {dayItems.map((e) => <EventRow key={e.key} e={e} tz={tz} open={openKey === e.key} onToggle={() => setOpenKey((k) => k === e.key ? null : e.key)} ctx={ctx} fields={{ attendees: true, location: true, description: true, past: true }} />)}
         </div> : null}
     </>;
+}
+var WORKDAY = { start: 9, end: 18 };
+function freeFromEvents(all, tz, now, slotMin) {
+  const today = now.slice(0, 10);
+  const days = [];
+  const nowMin = minsOf(now);
+  for (let i = 0, d = today; days.length < 10 && i < 21; i++, d = addDays(today, i)) {
+    const wd = weekdayOf(d);
+    if (wd === 0 || wd === 6) continue;
+    const dayStartMin = d === today ? Math.max(WORKDAY.start * 60, Math.ceil(nowMin / 15) * 15) : WORKDAY.start * 60;
+    const dayEnd = WORKDAY.end * 60;
+    if (dayEnd <= dayStartMin) continue;
+    const busyRaw = all.filter((e) => !e.allDay && e.myResponse !== "declined" && wallOf(e.start, tz).slice(0, 10) <= d && wallOf(e.end, tz).slice(0, 10) >= d).map((e) => ({ s: wallOf(e.start, tz).slice(0, 10) < d ? 0 : minsOf(wallOf(e.start, tz)), e: wallOf(e.end, tz).slice(0, 10) > d ? 1440 : minsOf(wallOf(e.end, tz)), title: e.title })).filter((b) => b.e > dayStartMin && b.s < dayEnd).sort((a, b) => a.s - b.s);
+    const merged = [];
+    for (const b of busyRaw) {
+      const last = merged[merged.length - 1];
+      if (last && b.s <= last.e) last.e = Math.max(last.e, b.e);
+      else merged.push({ ...b });
+    }
+    const free = [];
+    let cursor = dayStartMin;
+    for (const b of [...merged, { s: dayEnd, e: dayEnd, title: "" }]) {
+      if (b.s - cursor >= slotMin) free.push({ start: wallAt(d, cursor), end: wallAt(d, b.s) });
+      cursor = Math.max(cursor, b.e);
+    }
+    days.push({ date: d, weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wd], busy: merged.map((b) => ({ start: wallAt(d, Math.max(b.s, dayStartMin)), end: wallAt(d, Math.min(b.e, dayEnd)), title: b.title })), free });
+  }
+  const suggested = [];
+  days.forEach((day, di) => {
+    const picks = [];
+    for (const g of day.free) {
+      const gs = minsOf(g.start), ge = minsOf(g.end);
+      for (let t = Math.ceil(gs / 30) * 30; t + slotMin <= ge; t += 30) {
+        const h = t / 60;
+        let score = h >= 10 && h < 12 ? 3 : h >= 14 && h < 16 ? 2 : h >= 9 && h < 17 ? 1 : 0;
+        if (t - gs >= 15 && ge - (t + slotMin) >= 15) score += 1;
+        if (t % 60 === 0) score += 0.5;
+        score -= di * 0.4;
+        picks.push({ start: t, score });
+      }
+    }
+    const best = picks.sort((a, b) => b.score - a.score);
+    const am = best.find((p) => p.start < 720), pm = best.find((p) => p.start >= 720);
+    for (const p of [am, pm]) if (p) suggested.push({ date: day.date, weekday: day.weekday, start: wallAt(day.date, p.start), end: wallAt(day.date, p.start + slotMin) });
+  });
+  return { days, suggested: suggested.sort((a, b) => a.start.localeCompare(b.start)).slice(0, 6), slotMinutes: slotMin, workday: WORKDAY };
 }
 var GRID = { start: 8, end: 19, rowPx: 34 };
 var minsOf = (w) => {
@@ -822,7 +861,7 @@ function Agenda({ ctx, note }) {
     setOpenKey(null);
   }, [d]);
   const t0 = d.timing;
-  const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : `${comp.by === "jev" ? "picked by Jev" : "default pick"}${t0?.google ? ` \xB7 Google ${t0.google}` : ""}${t0?.jev ? ` \xB7 Jev ${t0.jev}` : ""}`);
+  const caption = note ?? (d.applied ? `Saved \xB7 ${d.applied.join(" \xB7 ")}` : "");
   const fields = comp.fields;
   const chips = <div style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
       {CHIPS.map(([k, label2]) => <Tab2 key={k} on={mode !== "free" && (k === "this_month" ? mode === "month" : mode === "agenda" && range === k)} onClick={() => {
@@ -836,11 +875,15 @@ function Agenda({ ctx, note }) {
     }
   }}>{label2}</Tab2>)}
       <Tab2 on={mode === "free"} onClick={() => {
-    if (d.free) setMode("free");
-    else void ctx.send("When am I free this week?");
+    setOpenKey(null);
+    setMode("free");
   }}>Find a time</Tab2>
     </div>;
-  if (mode === "free" && d.free) return <FreeTime ctx={ctx} caption={caption} chips={chips} />;
+  if (mode === "free") {
+    const free = d.free ?? freeFromEvents(all, tz, now, 30);
+    const cals = (Array.isArray(d.calendars) ? d.calendars : []).filter((c) => c.writable);
+    return <FreeTime ctx={{ ...ctx, details: { ...d, free: { ...free, seed: free.seed ?? { title: "New event", meet: false }, calendars: free.calendars ?? cals } } }} caption={caption} chips={chips} />;
+  }
   if (mode === "month" && months[monthIx]) {
     const m = months[monthIx];
     const inGrid = all.filter((e) => inRange(e, tz, m.gridStart, m.gridEnd));
@@ -922,7 +965,7 @@ function NewEventCard({ ctx, onBack }) {
         {calendars.length > 1 ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={(c) => set({ calendar: c })} label="Calendar" lead={(c) => <Dot color={c?.color} />} keyOf={(c) => c.id} labelOf={(c) => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar\u2026" : ctx.details?.picks ? <>{ctx.details.picks.by === "jev" ? "Options picked by Jev" : "Default options"} · <Timing t={ctx.details.timing} labels={TIMING2} /></> : ""}</span>
+        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar\u2026" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !s.title.trim() || !sd} onClick={create}>{sent ? "Saving\u2026" : "Save"}</Button>
       </div>
     </section>;
@@ -973,31 +1016,60 @@ function Rich({ text }) {
     return <div key={i} style={quote ? { borderLeft: `3px solid ${v("border")}`, paddingLeft: 8, ...muted } : void 0}>{parts}</div>;
   })}</div>;
 }
-function MessageRow({ m, ctx, fields, showChannel, onThread, compact }) {
+function AttachmentCard({ a, ctx }) {
+  return <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+      <span style={{ width: 4, borderRadius: 2, background: a.color ?? v("border"), flexShrink: 0 }} />
+      <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2, fontSize: 13 }}>
+        {a.pretext ? <div style={muted}>{a.pretext}</div> : null}
+        {a.author ? <div style={{ ...muted, fontSize: 12 }}>{a.author}</div> : null}
+        {a.title ? a.link ? <button type="button" onClick={() => ctx.openUrl(a.link)} style={{ ...bare, width: "auto", fontWeight: 700, color: v("accent"), cursor: "pointer", textAlign: "left" }}>{a.title}</button> : <div style={{ fontWeight: 700 }}>{a.title}</div> : null}
+        {a.text ? <Rich text={a.text.length > 280 ? `${a.text.slice(0, 280)}\u2026` : a.text} /> : null}
+        {a.fields?.length ? <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 12px", marginTop: 2 }}>{a.fields.map((f, i) => <div key={i}>{f.title ? <div style={{ ...muted, fontSize: 11, fontWeight: 600 }}>{f.title}</div> : null}<div>{f.value}</div></div>)}</div> : null}
+        {a.footer ? <div style={{ ...muted, fontSize: 11, marginTop: 2 }}>{a.footer}</div> : null}
+      </div>
+    </div>;
+}
+function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }) {
   const [hover, setHover] = useState4(false);
+  const [open, setOpen] = useState4(false);
+  const conv = convOf(m.channel);
+  const tgt = conv ? target(conv) : `#${m.channelName}`;
   const sendReact = (name) => {
-    void ctx.send(`React to ${m.channelName.startsWith("#") ? m.channelName : (ctx.details?.conversations ?? []).find((c) => c.id === m.channel)?.kind === "dm" ? `@${m.channelName}` : `#${m.channelName}`} ${m.ts}: :${name}:`);
+    void ctx.send(`React to ${tgt} ${m.ts}: :${name}:`);
   };
-  return <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: "flex", gap: 10, padding: compact ? "4px 8px" : "6px 8px", borderRadius: 8, position: "relative", background: hover ? v("interactive-hover") : m.mentionsMe ? "color-mix(in srgb, var(--kay-color-warning) 10%, transparent)" : "transparent" }}>
-      <Avatar m={m} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-          <span style={{ fontWeight: 700, fontSize: 14 }}>{m.user}</span>
-          <span style={{ ...muted, fontSize: 11 }}>{fmtTime2(m.time)}</span>
-          {showChannel ? <span style={{ ...muted, fontSize: 11 }}>in #{m.channelName}</span> : null}
-          {m.edited ? <span style={{ ...muted, fontSize: 11 }}>(edited)</span> : null}
+  const count = Math.max(m.replyCount, replies?.length ?? 0);
+  return <div>
+      <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: "flex", gap: 10, padding: compact ? "4px 8px" : "6px 8px", borderRadius: 8, position: "relative", background: hover ? v("interactive-hover") : m.mentionsMe ? "color-mix(in srgb, var(--kay-color-warning) 10%, transparent)" : "transparent" }}>
+        <Avatar m={m} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>{m.user}</span>
+            {m.bot ? <span style={{ fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 3, background: v("bg-subtle"), color: v("text-secondary"), letterSpacing: 0.3 }}>APP</span> : null}
+            <span style={{ ...muted, fontSize: 11 }}>{fmtTime2(m.time)}</span>
+            {showChannel ? <span style={{ ...muted, fontSize: 11 }}>in {tgt}</span> : null}
+            {m.edited ? <span style={{ ...muted, fontSize: 11 }}>(edited)</span> : null}
+          </div>
+          {m.text ? <Rich text={m.text} /> : null}
+          {m.attachments?.map((a, i) => <AttachmentCard key={i} a={a} ctx={ctx} />)}
+          {m.files?.length ? <div style={{ ...muted, fontSize: 12 }}>📎 {m.files.map((f) => f.title ?? f.name).join(", ")}</div> : null}
+          {fields.reactions && m.reactions.length || fields.threads && count ? <div style={{ ...row, marginTop: 4 }}>
+              {fields.reactions ? m.reactions.map((r) => <button key={r.name} type="button" onClick={() => sendReact(r.name)} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: "pointer" }}>{emoji(r.name)} {r.count}</button>) : null}
+              {fields.threads && count ? <button type="button" onClick={() => setOpen((o) => !o)} style={{ ...bare, width: "auto", fontSize: 12, color: v("accent"), fontWeight: 600, cursor: "pointer" }}>{open ? "Hide thread" : `${count} ${count === 1 ? "reply" : "replies"} \u203A`}</button> : null}
+            </div> : null}
         </div>
-        <Rich text={m.text} />
-        {m.files?.length ? <div style={{ ...muted, fontSize: 12 }}>📎 {m.files.map((f) => f.title ?? f.name).join(", ")}</div> : null}
-        {fields.reactions && m.reactions.length || fields.threads && m.replyCount ? <div style={{ ...row, marginTop: 4 }}>
-            {fields.reactions ? m.reactions.map((r) => <button key={r.name} type="button" onClick={() => sendReact(r.name)} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: "pointer" }}>{emoji(r.name)} {r.count}</button>) : null}
-            {fields.threads && m.replyCount && onThread ? <button type="button" onClick={() => onThread(m)} style={{ ...bare, width: "auto", fontSize: 12, color: v("accent"), fontWeight: 600, cursor: "pointer" }}>{m.replyCount} {m.replyCount === 1 ? "reply" : "replies"} ›</button> : null}
+        {hover ? <div style={{ position: "absolute", top: -10, right: 8, display: "inline-flex", gap: 2, padding: 2, borderRadius: 6, border: `1px solid ${v("border")}`, background: v("bg-elevated"), boxShadow: "0 2px 8px rgba(0,0,0,.08)" }}>
+            {QUICK.map((q) => <button key={q} type="button" onClick={() => sendReact(q)} title={`React :${q}:`} {...hoverable} style={{ ...bare, width: 26, height: 24, borderRadius: 4, cursor: "pointer", fontSize: 14 }}>{emoji(q)}</button>)}
+            <button type="button" onClick={() => setOpen(true)} title="Reply in thread" {...hoverable} style={{ ...bare, width: "auto", height: 24, padding: "0 6px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>Reply</button>
+            {m.permalink ? <OpenExternal url={m.permalink} title="Open in Slack" onOpen={ctx.openUrl} /> : null}
           </div> : null}
       </div>
-      {hover ? <div style={{ position: "absolute", top: -10, right: 8, display: "inline-flex", gap: 2, padding: 2, borderRadius: 6, border: `1px solid ${v("border")}`, background: v("bg-elevated"), boxShadow: "0 2px 8px rgba(0,0,0,.08)" }}>
-          {QUICK.map((q) => <button key={q} type="button" onClick={() => sendReact(q)} title={`React :${q}:`} {...hoverable} style={{ ...bare, width: 26, height: 24, borderRadius: 4, cursor: "pointer", fontSize: 14 }}>{emoji(q)}</button>)}
-          {onThread ? <button type="button" onClick={() => onThread(m)} title="Reply in thread" {...hoverable} style={{ ...bare, width: "auto", height: 24, padding: "0 6px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>Reply</button> : null}
-          {m.permalink ? <OpenExternal url={m.permalink} title="Open in Slack" onOpen={ctx.openUrl} /> : null}
+      {open ? <div style={{ margin: "0 0 8px 44px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 2 }}>
+          {(replies ?? []).map((r) => <MessageRow key={r.ts} m={r} ctx={ctx} fields={{ reactions: fields.reactions, threads: false }} compact convOf={convOf} />)}
+          {count > (replies?.length ?? 0) ? <div style={{ ...muted, fontSize: 12, padding: "2px 8px" }}>{count - (replies?.length ?? 0)} older {count - (replies?.length ?? 0) === 1 ? "reply is" : "replies are"} in Slack{m.permalink ? "" : ""}.</div> : null}
+          <ComposeBox placeholder="Reply…" sendLabel="Reply" onSend={async (text) => {
+    await ctx.send(`Reply in ${tgt} ${m.ts}:
+${text}`);
+  }} />
         </div> : null}
     </div>;
 }
@@ -1036,22 +1108,36 @@ function ComposeBox({ placeholder, draft, onSend, sendLabel = "Send" }) {
       </div>
     </div>;
 }
+function splitThreads(all) {
+  const repliesOf = /* @__PURE__ */ new Map();
+  const parents = [];
+  for (const m of all) {
+    if (m.threadTs) repliesOf.set(m.threadTs, [...repliesOf.get(m.threadTs) ?? [], m]);
+    else parents.push(m);
+  }
+  for (const [ts, rs] of repliesOf) if (!parents.some((p) => p.ts === ts)) {
+    const head = rs[0];
+    parents.push({ ...head, replyCount: rs.length - 1 });
+    repliesOf.set(ts, rs.slice(1));
+  }
+  return { parents: parents.sort((a, b) => a.ts.localeCompare(b.ts)), repliesOf };
+}
 function ChannelView({ ctx, note }) {
   const d = ctx.details ?? {};
   const ch = d.channel;
-  const messages = Array.isArray(d.messages) ? d.messages : [];
+  const convs = Array.isArray(d.conversations) ? d.conversations : [];
+  const convOf = (id) => convs.find((c) => c.id === id);
+  const all = Array.isArray(d.messages) ? d.messages : [];
   const comp = d.composition ?? { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
   const isThread = d.view === "thread" && d.threadTs;
-  const openThread = (m) => {
-    void ctx.send(`Show thread ${m.channel}/${m.threadTs ?? m.ts}`);
-  };
   if (!ch) return <Placeholder text="No conversation data." />;
+  const { parents, repliesOf } = isThread ? { parents: all, repliesOf: /* @__PURE__ */ new Map() } : splitThreads(all);
   const days = /* @__PURE__ */ new Map();
-  for (const m of messages) {
+  for (const m of parents) {
     const k = dayKey(m.time);
     days.set(k, [...days.get(k) ?? [], m]);
   }
-  const caption = note ?? (d.applied ? `Sent \xB7 ${d.applied.join(" \xB7 ")}` : d.via === "search" ? "via search (Slack's history limit is one read per minute)" : "");
+  const caption = note ?? (d.applied ? `Sent \xB7 ${d.applied.join(" \xB7 ")}` : "");
   const tgt = target(ch);
   return <section style={card}>
       <div style={{ ...pad, gap: 6 }}>
@@ -1062,10 +1148,10 @@ function ChannelView({ ctx, note }) {
           </div>
           <span style={{ ...muted, fontSize: 12, flexShrink: 0 }}>{caption}</span>
         </div>
-        {!messages.length ? <div style={{ ...muted, padding: "8px" }}>No messages yet.</div> : null}
+        {!parents.length ? <div style={{ ...muted, padding: "8px" }}>No messages in the last two weeks.</div> : null}
         {[...days.entries()].map(([k, items]) => <div key={k}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}><span style={{ flex: 1, height: 1, background: v("border") }} /><span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 12, border: `1px solid ${v("border")}` }}>{dayLabel(items[0].time)}</span><span style={{ flex: 1, height: 1, background: v("border") }} /></div>
-            {items.map((m, i) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} onThread={isThread ? void 0 : openThread} compact={isThread && i > 0} />)}
+            {items.map((m, i) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={isThread ? { ...comp.fields, threads: false } : comp.fields} replies={repliesOf.get(m.ts)} compact={isThread && i > 0} convOf={convOf} />)}
           </div>)}
         <ComposeBox placeholder={isThread ? "Reply\u2026" : `Message ${convLabel(ch)}`} draft={d.draft} sendLabel={isThread ? "Reply" : "Send"} onSend={async (text) => {
     await ctx.send(isThread ? `Reply in ${tgt} ${d.threadTs}:
@@ -1075,59 +1161,59 @@ ${text}`);
       </div>
     </section>;
 }
+var RANGE_DAYS = { today: 0, yesterday: 1, "3_days": 3, week: 7, "2_weeks": 14 };
 function InboxView({ ctx, note }) {
   const d = ctx.details ?? {};
   const all = Array.isArray(d.messages) ? d.messages : [];
   const convs = Array.isArray(d.conversations) ? d.conversations : [];
+  const convOf = (id) => convs.find((c) => c.id === id);
   const comp = d.composition ?? { view: "inbox", range: "3_days", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
   const [focus, setFocus] = useState4(comp.focus);
+  const [range, setRange] = useState4(comp.range);
   const [openConv, setOpenConv] = useState4(null);
   useEffect4(() => {
     setFocus(comp.focus);
+    setRange(comp.range);
     setOpenConv(null);
   }, [d]);
-  const kindOf = (id) => convs.find((c) => c.id === id)?.kind;
-  const loadedFocus = comp.focus;
-  const canFilter = (f) => f === loadedFocus || loadedFocus === "all";
-  const pick = (f) => {
-    if (canFilter(f)) setFocus(f);
-    else void ctx.send(f === "mentions" ? "Where was I mentioned on Slack?" : f === "dms" ? "Show my Slack DMs" : "Catch me up on Slack");
-  };
-  const msgs = all.filter((m) => focus === "all" ? true : focus === "mentions" ? m.mentionsMe : kindOf(m.channel) === "dm");
+  const cutoff = Date.now() - (RANGE_DAYS[range] + (range === "today" ? 1 : 0)) * 864e5;
+  const todayKey = (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA");
+  const inRange2 = (m) => range === "today" ? dayKey(m.time) === todayKey : range === "yesterday" ? dayKey(m.time) === new Date(Date.now() - 864e5).toLocaleDateString("en-CA") : new Date(m.time).getTime() >= cutoff;
+  const inFocus = (m) => focus === "all" ? true : focus === "mentions" ? m.mentionsMe : convOf(m.channel)?.kind === "dm";
+  const msgs = all.filter((m) => inRange2(m) && inFocus(m));
   const byConv = /* @__PURE__ */ new Map();
   for (const m of msgs) byConv.set(m.channel, [...byConv.get(m.channel) ?? [], m]);
   const groups = [...byConv.entries()].sort((a, b) => b[1][b[1].length - 1].time.localeCompare(a[1][a[1].length - 1].time));
-  const caption = note ?? `${RANGE_LABEL2[comp.range] ?? comp.range}${comp.by === "jev" ? " \xB7 picked by Jev" : ""}`;
-  const openThread = (m) => {
-    void ctx.send(`Show thread ${m.channel}/${m.threadTs ?? m.ts}`);
-  };
+  const caption = note ?? "";
+  const title = focus === "mentions" ? "Mentions" : focus === "dms" ? "Direct messages" : "Activity";
   return <section style={card}>
       <div style={{ ...pad, gap: 6 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <span style={{ fontSize: 15, fontWeight: 700 }}>{focus === "mentions" ? "Mentions" : focus === "dms" ? "Direct messages" : "Activity"} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{msgs.length} messages</span></span>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>{title} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{msgs.length} messages</span></span>
           <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
         </div>
-        <div style={{ display: "flex", gap: 2 }}>
-          {["all", "mentions", "dms"].map((f) => <Tab3 key={f} on={focus === f} onClick={() => pick(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>)}
+        <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+          {["all", "mentions", "dms"].map((f) => <Tab3 key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>)}
           <span style={{ flex: 1 }} />
-          {["today", "week"].filter((r) => r !== comp.range).map((r) => <Tab3 key={r} on={false} onClick={() => {
-    void ctx.send(r === "today" ? "What's new on Slack today?" : "What did I miss on Slack this week?");
-  }}>{RANGE_LABEL2[r]}</Tab3>)}
+          {["today", "3_days", "week", "2_weeks"].map((r) => <Tab3 key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL2[r]}</Tab3>)}
         </div>
-        {!groups.length ? <div style={{ ...muted, padding: 8 }}>Nothing here for {(RANGE_LABEL2[comp.range] ?? comp.range).toLowerCase()}.</div> : null}
+        {!groups.length ? <div style={{ ...muted, padding: 8 }}>{focus === "mentions" ? "No mentions" : focus === "dms" ? "No direct messages" : "Nothing"} {(RANGE_LABEL2[range] ?? range).toLowerCase()}.</div> : null}
         {groups.map(([id, items]) => {
-    const c = convs.find((x) => x.id === id);
+    const c = convOf(id);
     const open = openConv === id;
-    const shown = open ? items : items.slice(-2);
+    const { parents, repliesOf } = splitThreads(items);
+    const shown = open ? parents : parents.slice(-2);
+    const tgt = c ? target(c) : `#${items[0].channelName}`;
     return <div key={id} style={{ borderTop: `1px solid ${v("border")}`, paddingTop: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 8px 4px" }}>
-                <button type="button" onClick={() => setOpenConv((o) => o === id ? null : id)} style={{ ...bare, width: "auto", fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>{c ? convLabel(c) : `#${items[0].channelName}`} <span style={{ ...muted, fontWeight: 400 }}>{items.length}</span>{items.some((m) => m.mentionsMe) ? <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "white", background: v("danger"), borderRadius: 8, padding: "1px 6px" }}>@</span> : null}</button>
-                <button type="button" onClick={() => {
-      void ctx.send(`Show ${c ? target(c) : `#${items[0].channelName}`}`);
-    }} style={{ ...bare, width: "auto", fontSize: 12, color: v("accent"), cursor: "pointer" }}>Open ›</button>
-              </div>
-              {shown.map((m) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} onThread={openThread} compact />)}
-              {!open && items.length > 2 ? <button type="button" onClick={() => setOpenConv(id)} style={{ ...bare, width: "auto", fontSize: 12, ...muted, cursor: "pointer", padding: "2px 8px 6px" }}>{items.length - 2} more…</button> : null}
+              <button type="button" onClick={() => setOpenConv((o) => o === id ? null : id)} style={{ ...bare, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 8px 4px", cursor: "pointer", textAlign: "left" }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{c ? convLabel(c) : `#${items[0].channelName}`} <span style={{ ...muted, fontWeight: 400 }}>{parents.length}</span>{items.some((m) => m.mentionsMe) ? <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "white", background: v("danger"), borderRadius: 8, padding: "1px 6px" }}>@</span> : null}</span>
+                <span style={{ ...muted, fontSize: 12 }}>{open ? "Collapse" : parents.length > 2 ? `${parents.length - 2} more \u203A` : "Open \u203A"}</span>
+              </button>
+              {shown.map((m) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={repliesOf.get(m.ts)} compact convOf={convOf} />)}
+              {open ? <div style={{ padding: "4px 8px 2px" }}><ComposeBox placeholder={`Message ${c ? convLabel(c) : tgt}`} onSend={async (text) => {
+      await ctx.send(`Post in ${tgt}:
+${text}`);
+    }} /></div> : null}
             </div>;
   })}
       </div>
@@ -1158,7 +1244,7 @@ function Composer({ ctx }) {
 ${text}`);
   }} />
       </div>
-      {sent ? <div style={{ ...footer, ...muted, fontSize: 12 }}>Sending to Slack…</div> : d.picks ? <div style={{ ...footer, ...muted, fontSize: 12 }}>{d.picks.by === "jev" ? "Conversation picked by Jev" : "Conversation from the ask"}</div> : null}
+      {sent ? <div style={{ ...footer, ...muted, fontSize: 12 }}>Sending to Slack…</div> : null}
     </section>;
 }
 function SlackUi({ ctx, note }) {

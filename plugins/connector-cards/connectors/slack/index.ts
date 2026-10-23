@@ -18,7 +18,6 @@ import { parseCardMessage } from "./write.ts";
 const CHANNEL_REF = /(?:^|\s)#[a-z0-9][\w.'-]{1,}/i;
 const THREAD_REF = /\b[A-Z][A-Z0-9]{6,}\/\d{10}\.\d{6}\b/;
 const DM_REF = /(?:^|\s)@[a-z0-9][\w.'-]+/i;
-const MAX = 40;
 
 const channelInfo = (c: Channel) => ({ id: c.id, name: c.name, kind: c.kind, ...(c.topic ? { topic: c.topic } : {}), ...(c.members !== undefined ? { members: c.members } : {}) });
 const conversationsFor = (meta: Meta) => meta.channels.filter((c) => c.isMember !== false).map(channelInfo);
@@ -69,31 +68,28 @@ export const slack = defineConnector({
     const f = params.filters ?? {};
     const refText = [f.channel, ...(params.refs ?? []), task].filter(Boolean).join(" ");
     const { channel, ts } = resolve(meta, refText);
+    const view: Composition["view"] = ts ? "thread" : channel ? "channel" : "inbox";
+    // The card filters range, focus and threads itself, so the read is a two-week superset (replies included).
     let messages: Message[] = [];
-    let via: "history" | "search" | "replies" = "search";
-    let view: Composition["view"] = ts ? "thread" : channel ? "channel" : "inbox";
+    let via = "search";
     if (view === "thread" && channel && ts) { messages = await readThread(token, meta, channel, ts, signal); via = "replies"; }
-    else if (view === "channel" && channel) { const r = await readChannel(token, meta, channel, MAX, signal); messages = r.messages; via = r.via; }
-    const tSlackPre = ms(startedAt);
+    else if (view === "channel" && channel) { const r = await readChannel(token, meta, channel, 14, signal); messages = r.messages; via = r.via; }
+    else messages = await readInbox(token, meta, 14, params.query, signal);
+    const tSlack = ms(startedAt);
     const rubric = viewRubric(task, view, messages, channel);
     const state = { ...rubric.state, pastPicksForSimilarAsks: history.length ? history.join(" | ") : "none" };
     const { value, took: tJev } = await jev({ purpose: "slack-view" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, () => rubric.guess);
     const comp = value as Composition;
     if (typeof f.days === "string" && /^\d+$/.test(f.days)) comp.range = (Object.entries(RANGE_DAYS).find(([, d]) => d >= Number(f.days))?.[0] as any) ?? "2_weeks";
-    if (view === "inbox") {
-      messages = await readInbox(token, meta, { after: dateAfter(RANGE_DAYS[comp.range] + (comp.range === "today" ? 1 : 0)), mentionsOnly: comp.focus === "mentions", dmsOnly: comp.focus === "dms", query: params.query, limit: 60 }, signal);
-      if (comp.range === "today") { const today = new Date().toISOString().slice(0, 10); messages = messages.filter((m) => m.time.slice(0, 10) >= today); }
-    } else if (comp.range !== "2_weeks" && view === "channel") {
-      const cutoff = Date.now() - (RANGE_DAYS[comp.range] + (comp.range === "today" ? 1 : 0)) * 864e5;
-      const inRange = messages.filter((m) => new Date(m.time).getTime() >= cutoff);
-      if (inRange.length) messages = inRange; else comp.range = "2_weeks";
-    }
-    const tSlack = via === "search" && view === "inbox" ? ms(startedAt) : tSlackPre;
+    // What the initial filter shows, for the agent's one line and for the pick log; the card recomputes the same.
+    const cutoff = Date.now() - (RANGE_DAYS[comp.range] + (comp.range === "today" ? 1 : 0)) * 864e5;
+    const dmIds = new Set(meta.channels.filter((c) => c.kind === "dm").map((c) => c.id));
+    const shown = messages.filter((m) => view !== "inbox" || (new Date(m.time).getTime() >= cutoff && (comp.focus === "all" || (comp.focus === "mentions" ? m.mentionsMe : dmIds.has(m.channel)))));
     const payload = { kind: "view", task, me: meta.me, view, ...(channel ? { channel: channelInfo(channel) } : {}), ...(ts ? { threadTs: ts } : {}), messages, conversations: conversationsFor(meta), composition: comp, via, timing: { slack: tSlack, jev: tJev } };
     const picked = `${view}, ${comp.range}, ${comp.focus}`;
     const label = view === "thread" ? "thread" : view === "channel" ? `#${channel!.name}` : `inbox (${RANGE_LABEL[comp.range]}${comp.focus !== "all" ? `, ${comp.focus}` : ""})`;
-    if (!messages.length) return { summary: `No messages for ${label}; the card says so and offers other ranges. Reply with nothing.`, payload, picked };
-    return { summary: `Card shown (${messages.length} messages, ${label}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked };
+    if (!messages.length) return { summary: `No messages for ${label}; the card says so. Reply with nothing.`, payload, picked };
+    return { summary: `Card shown (${shown.length} messages, ${label}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked };
   },
 
   async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
@@ -106,7 +102,7 @@ export const slack = defineConnector({
       const messages = await readThread(token, meta, c, ts, signal);
       return { summary: `Card shown (thread in #${c.name}). Reply with nothing.`, payload: { kind: "view", view: "thread", me: meta.me, channel: channelInfo(c), threadTs: ts, messages, conversations: conversationsFor(meta), composition: { view: "thread", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: "replies", ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
     }
-    const r = await readChannel(token, meta, c, MAX, signal);
+    const r = await readChannel(token, meta, c, 14, signal);
     return { summary: `Card shown (#${c.name}). Reply with nothing.`, payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
   },
 
@@ -148,7 +144,7 @@ export const slack = defineConnector({
     // Redraw from Slack's truth: the thread when we touched one, else the channel (history budget permitting, search otherwise).
     let messages: Message[]; let via: string; let view: Composition["view"];
     if (threadTs && !post) { messages = await readThread(token, meta, target, threadTs, signal); via = "replies"; view = "thread"; }
-    else { const r = await readChannel(token, meta, target, MAX, signal); messages = r.messages; via = r.via; view = "channel"; }
+    else { const r = await readChannel(token, meta, target, 14, signal); messages = r.messages; via = r.via; view = "channel"; }
     return {
       summary: `Sent to Slack: ${applied.join("; ")}. The card shows the result; reply with nothing.`,
       payload: { kind: "view", view, me: meta.me, channel: channelInfo(target), ...(threadTs && !post ? { threadTs } : {}), messages, conversations: conversationsFor(meta), composition: { view, range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via, applied, timing: { slack: tWrite } },

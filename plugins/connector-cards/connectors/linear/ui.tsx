@@ -117,7 +117,7 @@ function IssueCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {dayShort(issue.createdAt)}{issue.completedAt ? ` · Done ${dayShort(issue.completedAt)}` : ""}</div> : null}
         <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} />
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note ?? (ctx.details?.timing?.linear ? `Linear ${ctx.details.timing.linear}` : undefined)} />
+      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note} />
     </section>
   );
 }
@@ -144,7 +144,7 @@ function NewIssueCard({ ctx }: { ctx: UiCtx }) {
         <div style={{ pointerEvents: sent ? "none" : "auto", opacity: sent ? 0.7 : 1 }}><PropertyPills value={props} options={draft.options} onChange={p => { touched.current = true; setProps(p); }} /></div>
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear…" : ctx.details?.picks ? <>{ctx.details.picks.by === "jev" ? "Fields picked by Jev" : "Default fields"} · <Timing t={ctx.details.timing} labels={TIMING} /></> : ""}</span>
+        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear…" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !title.trim()} onClick={create}>{sent ? "Creating…" : "Create issue"}</Button>
       </div>
     </section>
