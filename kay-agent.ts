@@ -255,11 +255,13 @@ async function classifyAdaptive(jev: any, state: object, questions: Record<strin
     ["A", questions],
     ["B", Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, foldBool(q)]))],
     ["C", Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, toChoice(q)]))],
+    // D: the single most important choice question, tiny state. Answers only whether the route works at all.
+    ["D", Object.fromEntries(Object.entries(questions).filter(([, q]) => q.type === "choice").slice(0, 1))],
   ];
   let lastErr: unknown;
   for (const [variant, qs] of variants) {
     try {
-      const { answers } = await jev.classify({ state, questions: qs });
+      const { answers } = await jev.classify({ state: variant === "D" ? { task: (state as any).task ?? "" } : state, questions: qs });
       // Normalise variant C back to bool answers so callers read one shape.
       const out: Record<string, any> = {};
       for (const [k, a] of Object.entries<any>(answers)) out[k] = questions[k]?.type === "bool" && a?.type === "choice" ? { type: "bool", probability: a.probabilities?.yes ?? (a.choice === "yes" ? a.confidence : 1 - a.confidence) } : a;
