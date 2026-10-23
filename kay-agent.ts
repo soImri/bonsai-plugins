@@ -282,12 +282,13 @@ export function activate(api: any) {
         const tFetch = ms(t0);
         const projectNamed = Boolean(params.project);
         const byType = { open: all.filter((i) => inScope(i, "open")).length, active: all.filter((i) => inScope(i, "active")).length, done: all.filter((i) => inScope(i, "done")).length, total: all.length };
-        const sample = all.slice(0, 8).map((i) => ({ identifier: i.identifier, title: i.title, state: i.state.name, stateType: i.state.type, priority: i.priority, project: i.project, assignee: i.assignee, labels: i.labels }));
+        const sample = all.slice(0, 8).map((i) => ({ identifier: i.identifier, title: i.title, state: i.state.name, stateType: i.state.type, priority: i.priority, project: i.project ?? "none", assignee: i.assignee ?? "none", labels: i.labels.join(", ") || "none", hasDescription: Boolean(i.description) }));
         const tJev0 = Date.now();
         const comp: Composition = await withJev(
           async (jev: any) => {
             const { answers } = await jev.classify({
-              state: { task: params.task, counts: byType, identifiersNamed: params.identifiers ?? [], projectNamed: params.project ?? null, distinctProjects: new Set(all.map((i) => i.project).filter(Boolean)).size, sample },
+              // Flat state on purpose: the hosted Jev route answered 400 to a nested object (2026-10-23).
+              state: { task: params.task, openCount: byType.open, activeCount: byType.active, doneCount: byType.done, totalCount: byType.total, identifiersNamed: (params.identifiers ?? []).join(", ") || "none", projectNamed: params.project ?? "none", distinctProjects: new Set(all.map((i) => i.project).filter(Boolean)).size, sample },
               questions: {
                 scope: { type: "choice", instructions: "Which issues does the task want to see? Judge the wording. Examples: 'what's open', 'my issues', 'todo', 'triage', 'what's left', 'backlog' -> open; 'in progress', 'what's being worked on', 'wip' -> active; 'what shipped', 'what's done', 'completed', 'closed' -> done; 'everything', 'all issues', 'where do we stand', 'overview', 'board', or the task names specific identifiers -> all.",
                   criteria: { open: "Unfinished work: triage, backlog, todo, in progress, in review.", active: "Only work that has started: in progress, in review.", done: "Only completed issues.", all: "Every issue regardless of state." } },
@@ -395,25 +396,31 @@ export function activate(api: any) {
         const tJev0 = Date.now();
         const picks = await withJev(
           async (jev: any) => {
+            // Plain token keys only (p0, s1, label_2): names with spaces or punctuation are mapped back after the answer.
+            const projects = meta.projects.slice(0, 12);
             const projectCriteria: Record<string, string> = { none: "The task does not belong to any listed project." };
-            for (const p of meta.projects.slice(0, 12)) projectCriteria[p.name] = p.summary ? `Belongs to "${p.name}": ${p.summary}` : `Belongs to the project named "${p.name}".`;
+            projects.forEach((p, i) => { projectCriteria[`p${i}`] = p.summary ? `Project "${p.name}": ${p.summary}` : `The project named "${p.name}".`; });
+            const openStates = meta.states.filter((s) => s.type !== "completed" && s.type !== "canceled");
             const stateCriteria: Record<string, string> = {};
-            for (const s of meta.states.filter((s) => s.type !== "completed" && s.type !== "canceled")) stateCriteria[s.name] = s.type === "unstarted" ? `Normal new work, ready to pick up (${s.name}). The default.` : s.type === "backlog" ? `Someday, not now, parked, low commitment (${s.name}).` : s.type === "started" ? `Already being worked on right now (${s.name}).` : `Needs triage first (${s.name}).`;
+            openStates.forEach((s, i) => { stateCriteria[`s${i}`] = s.type === "unstarted" ? `"${s.name}": normal new work, ready to pick up. The default.` : s.type === "backlog" ? `"${s.name}": someday, not now, parked, low commitment.` : s.type === "started" ? `"${s.name}": already being worked on right now.` : `"${s.name}": needs triage first.`; });
+            const labelsAsked = meta.labels.slice(0, 8);
             const questions: Record<string, any> = {
               priority: { type: "choice", instructions: "Which priority does the task state or imply? Explicit words win: 'urgent', 'high', 'medium', 'low'. Without a word: a blocker or outage -> urgent; a must-do soon -> high; ordinary work -> medium; nice-to-have -> low; no signal -> none.", criteria: { none: "No priority stated or implied.", urgent: "Urgent, critical, blocker, ASAP, P0.", high: "High, important, soon, P1.", medium: "Medium, normal, P2, or ordinary planned work.", low: "Low, minor, someday, P3." } },
-              state: { type: "choice", instructions: `Which workflow state should the new issue start in? Default to the ordinary 'ready to pick up' state unless the task says it is already in progress or parked for later.`, criteria: stateCriteria },
+              state: { type: "choice", instructions: "Which workflow state should the new issue start in? Default to the ordinary 'ready to pick up' state unless the task says it is already in progress or parked for later.", criteria: stateCriteria },
               project: { type: "choice", instructions: "Which project does this issue belong to, judged by its name and summary against the task? Choose none when no project fits well.", criteria: projectCriteria },
               assignToMe: { type: "bool", instructions: "Should the issue be assigned to the person asking?", criteria: { true: "The task says me, my, I will, mine, or the team has one member who does everything.", false: "The task names someone else or says nothing about ownership on a multi-person team." } },
             };
-            for (const l of meta.labels.slice(0, 8)) questions[`label:${l.name}`] = { type: "bool", instructions: `Apply the label "${l.name}"?`, criteria: { true: l.description ? `The task matches this label: ${l.description}` : `The task is about ${l.name.toLowerCase()}.`, false: "The label does not fit the task." } };
-            const { answers } = await jev.classify({ state: { task: params.task, title, description, teamMembers: meta.members, viewer: meta.viewer }, questions });
+            labelsAsked.forEach((l, i) => { questions[`label_${i}`] = { type: "bool", instructions: `Apply the label "${l.name}"?`, criteria: { true: l.description ? `The task matches this label: ${l.description}` : `The task is about ${l.name.toLowerCase()}.`, false: "The label does not fit the task." } }; });
+            const { answers } = await jev.classify({ state: { task: params.task, title, description: description || "none", teamMembers: meta.members.join(", ") || "none", viewer: meta.viewer || "unknown" }, questions });
             if (answers.priority?.type !== "choice") return undefined;
             const pr = { none: 0, urgent: 1, high: 2, medium: 3, low: 4 }[answers.priority.choice as string] ?? 0;
             const explicit = guessPriority(params.task);
-            const labels = meta.labels.slice(0, 8).filter((l) => answers[`label:${l.name}`]?.type === "bool" && answers[`label:${l.name}`].probability >= 0.6).map((l) => l.name);
-            const project = answers.project?.type === "choice" && answers.project.choice !== "none" && answers.project.confidence >= 0.4 ? answers.project.choice : undefined;
+            const labels = labelsAsked.filter((_, i) => answers[`label_${i}`]?.type === "bool" && answers[`label_${i}`].probability >= 0.6).map((l) => l.name);
+            const projectPick = answers.project?.type === "choice" && answers.project.choice !== "none" && answers.project.confidence >= 0.4 ? projects[Number(String(answers.project.choice).slice(1))] : undefined;
+            const project = projectPick?.name;
+            const statePick = answers.state?.type === "choice" ? openStates[Number(String(answers.state.choice).slice(1))] : undefined;
             const assignee = answers.assignToMe?.type === "bool" && answers.assignToMe.probability >= 0.5 ? meta.viewer : undefined;
-            return { state: answers.state?.type === "choice" ? answers.state.choice : defaultState?.name, priority: explicit || pr, project, labels, assignee, by: "jev" as const, confidence: answers.priority.confidence };
+            return { state: statePick?.name ?? defaultState?.name, priority: explicit || pr, project, labels, assignee, by: "jev" as const, confidence: answers.priority.confidence };
           },
           fallback,
           { timeoutMs: 6000, purpose: "linear-new-issue", ...(signal ? { signal } : {}) },
