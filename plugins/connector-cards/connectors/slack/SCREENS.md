@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- | --- |
 | Channel view | `channel` | header (#name, members, topic), day dividers, messages (avatar initials, name, APP badge, time, text with bold/italic/code/quotes, app attachments as Slack unfurls, files, reactions as pills, "N replies ›"), composer | the composer, a reply box per thread | `chat.postMessage` (`Post in #name:` + text; `Reply in #name <ts>:` + text) | Two weeks loaded up front (search `in:#name`, replies included, merged with one history read when Slack's minute allows); threads open in place from the loaded replies; hover shows quick reactions (✅ 👍 👀 🎉), Reply, open-in-Slack |
 | Thread | `thread` (standalone, when the ask names a thread) | the parent and its replies, reply composer | the reply composer | `chat.postMessage` with `thread_ts` | Inside a channel or inbox card, threads open in place instead |
-| Activity / inbox | `inbox` | messages grouped by conversation, newest conversation first, mention badge, two most recent per conversation, "N more ›" expands the conversation with its composer | composers per expanded conversation, reply boxes per thread | `chat.postMessage` | Two weeks of everything loaded once (search `after:`); the All / Mentions / DMs and Today / 3 days / Week / 2 weeks chips filter in the card; Jev only picks the chips' starting positions |
+| Activity | `activity` | Slack's Activity: Mentions (by others, outside threads you are in), Threads (you started, replied in, or were mentioned in: parent + replies open in place), Direct messages (per person, last three, with a composer); each with profile pictures; newest first; no time filters, two weeks loaded | reply boxes per thread, DM composers, quick reactions, open-in-Slack; `New message` (conversation picker + box) when Jev picks the `post` follow-up | `chat.postMessage` (post / reply), `reactions.add` | Jev picks the focus: needs_me (default: all three sections, empty ones hidden), mentions, threads, dms, all (recent per channel; also for a topic search) |
 | Composer | `draft` | To (conversation picker), message box, ⌘↩ | all | `chat.postMessage` (`Post in #name:` or `Post in @person:` + text) | Jev picks the conversation from the ask against names and topics when the ask names none |
 
 **Jev picks (view):** range, focus, show threads, show reactions. **Jev picks (draft):** the conversation (up to 8 candidates).
@@ -20,7 +20,9 @@
 | Screen | Native controls (always) | Follow-up candidates |
 | --- | --- | --- |
 | Channel / thread | composer, threads open in place with reply box, reactions and quick reactions, open-in-Slack | none yet |
-| Inbox | focus and range chips cut to the ask (asked + neighbour; all for a general catch-up), conversations expand in place with composer | none yet |
+| Activity | sections (Mentions / Threads / DMs) with reply boxes, DM composers, reactions, threads open in place; no chips | `post`: a New message button opens the composer with a conversation picker (when the ask or context is about telling, pinging, announcing) |
+
+**Profile pictures:** `users.list` `profile.image_72` on every person (and `bot_profile.icons` on apps), carried on messages and DM conversations; the card draws coloured initials until the image loads or if it cannot.
 
 **Card messages (writes only):** `Post in #name:` + body · `Reply in #name <ts>:` + body · `React to #name <ts>: :emoji:`.
 

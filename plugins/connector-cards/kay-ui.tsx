@@ -1083,13 +1083,18 @@ var gcalUi = { id: "gcal", label: "Google Calendar", component: GcalUi, runningT
 
 // connectors/slack/ui.tsx
 import { useEffect as useEffect4, useMemo as useMemo3, useState as useState4 } from "react";
-var RANGE_LABEL2 = { today: "Today", yesterday: "Yesterday", "3_days": "Last 3 days", week: "This week", "2_weeks": "Last 2 weeks" };
 var EMOJI = { thumbsup: "\u{1F44D}", "+1": "\u{1F44D}", white_check_mark: "\u2705", eyes: "\u{1F440}", heart: "\u2764\uFE0F", tada: "\u{1F389}", raised_hands: "\u{1F64C}", pray: "\u{1F64F}", fire: "\u{1F525}", rocket: "\u{1F680}", joy: "\u{1F602}", smile: "\u{1F604}", thinking_face: "\u{1F914}", clap: "\u{1F44F}", wave: "\u{1F44B}", 100: "\u{1F4AF}", ok_hand: "\u{1F44C}", point_up: "\u261D\uFE0F" };
 var QUICK = ["white_check_mark", "thumbsup", "eyes", "tada"];
 var emoji = (name) => EMOJI[name] ?? `:${name}:`;
 var convLabel = (c) => c ? c.kind === "dm" ? c.name : `#${c.name}` : "";
 var target = (c) => c.kind === "dm" ? `@${c.name}` : `#${c.name}`;
+var initialsOf = (name) => name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((x) => x[0]?.toUpperCase() ?? "").join("") || "?";
 var fmtTime2 = (iso) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+var fmtWhen = (iso) => {
+  const d = new Date(iso);
+  const same = d.toLocaleDateString("en-CA") === (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA");
+  return same ? fmtTime2(iso) : `${d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} ${fmtTime2(iso)}`;
+};
 var dayKey = (iso) => new Date(iso).toLocaleDateString("en-CA");
 var dayLabel = (iso) => {
   const d = new Date(iso);
@@ -1104,8 +1109,16 @@ var hue = (s) => {
   for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return h;
 };
-var Tab3 = ({ on, children, onClick }) => <button type="button" onClick={onClick} style={{ ...bare, width: "auto", padding: "3px 8px", borderRadius: 6, fontSize: 12, fontWeight: on ? 600 : 400, background: on ? v("bg-subtle") : "transparent", color: on ? v("text-primary") : v("text-secondary"), cursor: "pointer" }}>{children}</button>;
-var Avatar = ({ m }) => <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, flexShrink: 0, background: `hsl(${hue(m.userId ?? m.user)} 45% 55%)`, color: "white", fontSize: 13, fontWeight: 600 }}>{m.initials}</span>;
+function Face({ src, initials: initials2, seed, size = 36 }) {
+  const [failed, setFailed] = useState4(false);
+  useEffect4(() => {
+    setFailed(false);
+  }, [src]);
+  const base = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: size, height: size, borderRadius: Math.round(size * 0.22), flexShrink: 0, overflow: "hidden", background: `hsl(${hue(seed)} 45% 55%)`, color: "white", fontSize: Math.round(size * 0.36), fontWeight: 600 };
+  if (src && !failed) return <span style={base}><img src={src} alt="" width={size} height={size} loading="lazy" onError={() => setFailed(true)} style={{ width: size, height: size, objectFit: "cover", display: "block" }} /></span>;
+  return <span style={base}>{initials2}</span>;
+}
+var Avatar = ({ m }) => <Face src={m.avatar} initials={m.initials} seed={m.userId ?? m.user} />;
 function Rich({ text }) {
   const lines = text.split("\n");
   return <div style={{ lineHeight: "20px", wordBreak: "break-word" }}>{lines.map((line, i) => {
@@ -1144,7 +1157,7 @@ function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }) {
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <span style={{ fontWeight: 700, fontSize: 14 }}>{m.user}</span>
             {m.bot ? <span style={{ fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 3, background: v("bg-subtle"), color: v("text-secondary"), letterSpacing: 0.3 }}>APP</span> : null}
-            <span style={{ ...muted, fontSize: 11 }}>{fmtTime2(m.time)}</span>
+            <span style={{ ...muted, fontSize: 11 }}>{fmtWhen(m.time)}</span>
             {showChannel ? <span style={{ ...muted, fontSize: 11 }}>in {tgt}</span> : null}
             {m.edited ? <span style={{ ...muted, fontSize: 11 }}>(edited)</span> : null}
           </div>
@@ -1242,7 +1255,7 @@ function ChannelView({ ctx, note }) {
       <div style={{ ...pad, gap: 6 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingBottom: 6, borderBottom: `1px solid ${v("border")}` }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{isThread ? "Thread" : convLabel(ch)}{isThread ? <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}> · {convLabel(ch)}</span> : null}{ch.kind === "private" ? <span style={{ ...muted, fontSize: 12 }}> 🔒</span> : null}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>{!isThread && ch.kind === "dm" ? <Face src={ch.avatar} initials={initialsOf(ch.name)} seed={ch.id} size={22} /> : null}{isThread ? "Thread" : convLabel(ch)}{isThread ? <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}> · {convLabel(ch)}</span> : null}{ch.kind === "private" ? <span style={{ ...muted, fontSize: 12 }}> 🔒</span> : null}</div>
             {!isThread && (ch.topic || ch.members) ? <div style={{ ...muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{[ch.members ? `${ch.members} members` : null, ch.topic].filter(Boolean).join(" \xB7 ")}</div> : null}
           </div>
           <span style={{ ...muted, fontSize: 12, flexShrink: 0 }}>{caption}</span>
@@ -1260,63 +1273,113 @@ ${text}`);
       </div>
     </section>;
 }
-var RANGE_DAYS = { today: 0, yesterday: 1, "3_days": 3, week: 7, "2_weeks": 14 };
-function InboxView({ ctx, note }) {
+function ActivityView({ ctx, note }) {
   const d = ctx.details ?? {};
   const all = Array.isArray(d.messages) ? d.messages : [];
   const convs = Array.isArray(d.conversations) ? d.conversations : [];
+  const me = d.me ?? "";
   const convOf = (id) => convs.find((c) => c.id === id);
-  const comp = d.composition ?? { view: "inbox", range: "3_days", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
-  const [focus, setFocus] = useState4(comp.focus);
-  const [range, setRange] = useState4(comp.range);
-  const [openConv, setOpenConv] = useState4(null);
+  const comp = d.composition ?? { view: "activity", focus: "needs_me", fields: { reactions: true, threads: true }, by: "fallback" };
+  const fu = useFollowUps(comp.followUps);
+  const [posting, setPosting] = useState4(false);
   useEffect4(() => {
-    setFocus(comp.focus);
-    setRange(comp.range);
-    setOpenConv(null);
+    setPosting(false);
   }, [d]);
-  const cutoff = Date.now() - (RANGE_DAYS[range] + (range === "today" ? 1 : 0)) * 864e5;
-  const todayKey = (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA");
-  const inRange2 = (m) => range === "today" ? dayKey(m.time) === todayKey : range === "yesterday" ? dayKey(m.time) === new Date(Date.now() - 864e5).toLocaleDateString("en-CA") : new Date(m.time).getTime() >= cutoff;
-  const inFocus = (m) => focus === "all" ? true : focus === "mentions" ? m.mentionsMe : convOf(m.channel)?.kind === "dm";
-  const msgs = all.filter((m) => inRange2(m) && inFocus(m));
-  const byConv = /* @__PURE__ */ new Map();
-  for (const m of msgs) byConv.set(m.channel, [...byConv.get(m.channel) ?? [], m]);
-  const groups = [...byConv.entries()].sort((a, b) => b[1][b[1].length - 1].time.localeCompare(a[1][a[1].length - 1].time));
+  const mine = (m) => Boolean(me) && m.userId === me;
+  const isDm = (m) => convOf(m.channel)?.kind === "dm";
+  const byTs = new Map(all.map((m) => [`${m.channel}/${m.ts}`, m]));
+  const parentOf = (m) => m.threadTs ? byTs.get(`${m.channel}/${m.threadTs}`) : void 0;
+  const repliesOf = (channel, ts) => all.filter((x) => x.channel === channel && x.threadTs === ts).sort((p, q) => p.ts.localeCompare(q.ts));
+  const latest = (ms) => ms.reduce((t, m) => m.time > t ? m.time : t, "");
   const caption = note ?? "";
-  const title = focus === "mentions" ? "Mentions" : focus === "dms" ? "Direct messages" : "Activity";
+  const threadKeys = /* @__PURE__ */ new Set();
+  for (const m of all) {
+    if (mine(m) || m.mentionsMe) {
+      const k = m.threadTs ? `${m.channel}/${m.threadTs}` : m.replyCount > 0 ? `${m.channel}/${m.ts}` : "";
+      if (k) threadKeys.add(k);
+    }
+  }
+  const threadGroups = [...threadKeys].map((k) => {
+    const [channel, ts] = k.split("/");
+    const parent = byTs.get(k);
+    const replies = repliesOf(channel, ts);
+    const c = convOf(channel);
+    return { key: k, conv: c, label: c ? convLabel(c) : `#${(parent ?? replies[0])?.channelName ?? ""}`, parent, items: parent ? [parent] : replies.slice(0, 1), replies: parent ? replies : replies.slice(1), threadTs: ts };
+  }).filter((g) => g.parent || g.replies.length).sort((p, q) => latest([...q.items, ...q.replies]).localeCompare(latest([...p.items, ...p.replies])));
+  const mentionMsgs = all.filter((m) => m.mentionsMe && !mine(m) && !isDm(m) && !threadKeys.has(`${m.channel}/${m.threadTs ?? m.ts}`)).sort((p, q) => q.time.localeCompare(p.time));
+  const mentionGroups = mentionMsgs.map((m) => {
+    const c = convOf(m.channel);
+    const p = parentOf(m);
+    return { key: `m/${m.channel}/${m.ts}`, conv: c, label: c ? convLabel(c) : `#${m.channelName}`, parent: p, items: [m], replies: m.threadTs ? [] : repliesOf(m.channel, m.ts), threadTs: m.threadTs ?? (m.replyCount ? m.ts : void 0) };
+  });
+  const dmMap = /* @__PURE__ */ new Map();
+  for (const m of all) if (isDm(m)) dmMap.set(m.channel, [...dmMap.get(m.channel) ?? [], m]);
+  const dmGroups = [...dmMap.entries()].map(([id, items]) => {
+    const c = convOf(id);
+    const sorted = items.sort((p, q) => p.ts.localeCompare(q.ts));
+    return { key: `dm/${id}`, conv: c, label: convLabel(c), items: sorted.slice(-3), replies: [], threadTs: void 0 };
+  }).sort((p, q) => latest(q.items).localeCompare(latest(p.items)));
+  const chMap = /* @__PURE__ */ new Map();
+  for (const m of all) if (!isDm(m) && !m.threadTs) chMap.set(m.channel, [...chMap.get(m.channel) ?? [], m]);
+  const allGroups = [...chMap.entries()].map(([id, items]) => {
+    const c = convOf(id);
+    const sorted = items.sort((p, q) => p.ts.localeCompare(q.ts));
+    return { key: `c/${id}`, conv: c, label: c ? convLabel(c) : `#${items[0].channelName}`, items: sorted.slice(-4), replies: [], threadTs: void 0 };
+  }).sort((p, q) => latest(q.items).localeCompare(latest(p.items)));
+  const sections = (comp.focus === "all" ? [{ id: "all", title: d.task && d.query ? `Results for \u201C${d.query}\u201D` : "Recent", groups: allGroups }] : [
+    ...comp.focus === "needs_me" || comp.focus === "mentions" ? [{ id: "mentions", title: "Mentions", groups: mentionGroups }] : [],
+    ...comp.focus === "needs_me" || comp.focus === "threads" ? [{ id: "threads", title: "Threads", groups: threadGroups }] : [],
+    ...comp.focus === "needs_me" || comp.focus === "dms" ? [{ id: "dms", title: "Direct messages", groups: dmGroups }] : []
+  ]).filter((sec) => comp.focus === "needs_me" ? sec.groups.length > 0 : true);
+  const total = sections.reduce((n, sec) => n + sec.groups.length, 0);
+  const title = comp.focus === "mentions" ? "Mentions" : comp.focus === "threads" ? "Threads" : comp.focus === "dms" ? "Direct messages" : comp.focus === "all" ? "Slack" : "Activity";
+  const summary = comp.focus === "needs_me" ? [mentionGroups.length ? `${mentionGroups.length} mention${mentionGroups.length === 1 ? "" : "s"}` : "", threadGroups.length ? `${threadGroups.length} thread${threadGroups.length === 1 ? "" : "s"}` : "", dmGroups.length ? `${dmGroups.length} DM${dmGroups.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" \xB7 ") : `${total}`;
+  const empty = comp.focus === "needs_me" ? "Nothing needs you: no mentions, no threads of yours with replies, no DMs in the last two weeks." : comp.focus === "mentions" ? "No one mentioned you in the last two weeks." : comp.focus === "threads" ? "No threads of yours with activity in the last two weeks." : comp.focus === "dms" ? "No direct messages in the last two weeks." : "Nothing in the last two weeks.";
   return <section style={card}>
       <div style={{ ...pad, gap: 6 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <span style={{ fontSize: 15, fontWeight: 700 }}>{title} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{msgs.length} messages</span></span>
-          <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>{title} <span style={{ ...muted, fontWeight: 400, fontSize: 12 }}>{summary}</span></span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <span style={{ ...muted, fontSize: 12 }}>{caption}</span>
+            {fu.picked("post") ? <Button variant={posting ? "secondary" : "primary"} size="sm" onClick={() => setPosting((p) => !p)}>{posting ? "Cancel" : "New message"}</Button> : null}
+          </span>
         </div>
-        <div style={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center" }}>
-          {(Array.isArray(comp.focuses) && comp.focuses.length ? comp.focuses : ["all", "mentions", "dms"]).map((f) => <Tab3 key={f} on={focus === f} onClick={() => setFocus(f)}>{f === "all" ? "All" : f === "mentions" ? "Mentions" : "DMs"}</Tab3>)}
-          <span style={{ flex: 1 }} />
-          {(Array.isArray(comp.ranges) && comp.ranges.length ? comp.ranges : ["today", "3_days", "week", "2_weeks"]).map((r) => <Tab3 key={r} on={range === r} onClick={() => setRange(r)}>{RANGE_LABEL2[r]}</Tab3>)}
-        </div>
-        {!groups.length ? <div style={{ ...muted, padding: 8 }}>{focus === "mentions" ? "No mentions" : focus === "dms" ? "No direct messages" : "Nothing"} {(RANGE_LABEL2[range] ?? range).toLowerCase()}.</div> : null}
-        {groups.map(([id, items]) => {
-    const c = convOf(id);
-    const open = openConv === id;
-    const { parents, repliesOf } = splitThreads(items);
-    const shown = open ? parents : parents.slice(-2);
-    const tgt = c ? target(c) : `#${items[0].channelName}`;
-    return <div key={id} style={{ borderTop: `1px solid ${v("border")}`, paddingTop: 6 }}>
-              <button type="button" onClick={() => setOpenConv((o) => o === id ? null : id)} style={{ ...bare, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 8px 4px", cursor: "pointer", textAlign: "left" }}>
-                <span style={{ fontSize: 13, fontWeight: 700 }}>{c ? convLabel(c) : `#${items[0].channelName}`} <span style={{ ...muted, fontWeight: 400 }}>{parents.length}</span>{items.some((m) => m.mentionsMe) ? <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "white", background: v("danger"), borderRadius: 8, padding: "1px 6px" }}>@</span> : null}</span>
-                <span style={{ ...muted, fontSize: 12 }}>{open ? "Collapse" : parents.length > 2 ? `${parents.length - 2} more \u203A` : "Open \u203A"}</span>
-              </button>
-              {shown.map((m) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={repliesOf.get(m.ts)} compact convOf={convOf} />)}
-              {open ? <div style={{ padding: "4px 8px 2px" }}><ComposeBox placeholder={`Message ${c ? convLabel(c) : tgt}`} onSend={async (text) => {
+        {posting ? <InlineComposer ctx={ctx} convs={convs} onDone={() => setPosting(false)} /> : null}
+        {!total ? <div style={{ ...muted, padding: 8 }}>{empty}</div> : null}
+        {sections.map((sec) => <div key={sec.id}>
+            {sections.length > 1 ? <div style={{ ...muted, fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", padding: "8px 8px 2px" }}>{sec.title}</div> : null}
+            {sec.groups.map((g) => {
+    const tgt = g.conv ? target(g.conv) : `#${(g.items[0] ?? g.replies[0])?.channelName ?? ""}`;
+    const head = g.items[0];
+    return <div key={g.key} style={{ borderTop: `1px solid ${v("border")}`, padding: "6px 0 2px" }}>
+                  <div style={{ ...muted, fontSize: 12, fontWeight: 600, padding: "0 8px 2px", display: "flex", alignItems: "center", gap: 6 }}>{sec.id === "dms" && g.conv ? <Face src={g.conv.avatar} initials={initialsOf(g.conv.name)} seed={g.conv.id} size={18} /> : null}{g.label}{g.threadTs && head && !head.threadTs ? <span style={{ fontWeight: 400 }}> · thread</span> : null}</div>
+                  {g.parent && head && head.threadTs ? <MessageRow m={g.parent} ctx={ctx} fields={{ ...comp.fields, threads: false }} compact convOf={convOf} /> : null}
+                  {g.items.map((m) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={g.threadTs && !m.threadTs ? g.replies : void 0} compact convOf={convOf} />)}
+                  {sec.id === "dms" && g.conv ? <div style={{ padding: "2px 8px 4px" }}><ComposeBox placeholder={`Message ${convLabel(g.conv)}`} onSend={async (text) => {
       await ctx.send(`Post in ${tgt}:
 ${text}`);
     }} /></div> : null}
-            </div>;
+                </div>;
   })}
+          </div>)}
       </div>
     </section>;
+}
+function InlineComposer({ ctx, convs, onDone }) {
+  const [conv, setConv] = useState4(convs[0]);
+  if (!convs.length) return null;
+  return <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "6px 8px 8px", borderRadius: 8, border: `1px solid ${v("border")}`, background: v("bg-subtle") }}>
+      <div style={{ ...row, fontSize: 13 }}>
+        <span style={muted}>To</span>
+        <Picker items={convs} value={conv} onPick={(c) => setConv(c)} label="Conversation" lead={(c) => c?.kind === "dm" ? <Face src={c.avatar} initials={initialsOf(c.name)} seed={c.id} size={16} /> : <span style={{ fontSize: 12 }}>#</span>} keyOf={(c) => c.id} labelOf={(c) => convLabel(c)} />
+      </div>
+      <ComposeBox placeholder={`Message ${convLabel(conv)}`} onSend={async (text) => {
+    if (!conv) return;
+    await ctx.send(`Post in ${target(conv)}:
+${text}`);
+    onDone();
+  }} />
+    </div>;
 }
 function Composer({ ctx }) {
   const d = ctx.details ?? {};
@@ -1350,7 +1413,7 @@ function SlackUi({ ctx, note }) {
   const d = ctx.details ?? {};
   if (d.kind === "draft") return <Composer ctx={ctx} />;
   if (d.error) return <ErrorCard message={d.error} />;
-  if (d.view === "inbox") return <InboxView ctx={ctx} note={note} />;
+  if (d.view === "activity" || d.view === "inbox") return <ActivityView ctx={ctx} note={note} />;
   return <ChannelView ctx={ctx} note={note} />;
 }
 var slackUi = { id: "slack", label: "Slack", component: SlackUi, runningText: (k) => k === "apply" ? "Sending to Slack\u2026" : "Reading Slack\u2026" };

@@ -12,13 +12,13 @@ const META_TTL_MS = 10 * 60 * 1000;
 const HISTORY_WINDOW_MS = 60_000;
 
 export type Channel = { id: string; name: string; kind: "channel" | "private" | "dm" | "group"; topic?: string; members?: number; userId?: string; isMember?: boolean };
-export type Person = { id: string; name: string; display: string; initials: string; title?: string; bot?: boolean };
+export type Person = { id: string; name: string; display: string; initials: string; title?: string; bot?: boolean; avatar?: string };
 export type Reaction = { name: string; count: number; mine: boolean };
 /** An app/bot attachment or link unfurl, in Slack's own shape: a colour bar, a title (linked), text, fields, a footer. */
 export type Attachment = { title?: string; link?: string; text?: string; pretext?: string; color?: string; footer?: string; author?: string; fields?: { title?: string; value: string }[]; image?: string };
 export type Message = {
   ref: string; channel: string; channelName: string; ts: string; threadTs?: string; time: string;
-  userId?: string; user: string; initials: string; bot?: boolean; text: string; raw: string;
+  userId?: string; user: string; initials: string; avatar?: string; bot?: boolean; text: string; raw: string;
   attachments: Attachment[];
   reactions: Reaction[]; replyCount: number; permalink?: string; mentionsMe: boolean; edited?: boolean; files?: { name: string; title?: string }[];
 };
@@ -59,7 +59,8 @@ async function fetchMeta(token: string, cache: DiskCache, signal?: AbortSignal):
   for (const u of users.members ?? []) {
     if (u.deleted) continue;
     const display = u.profile?.display_name || u.profile?.real_name || u.real_name || u.name;
-    people[u.id] = { id: u.id, name: u.name, display, initials: initialsOf(display), ...(u.profile?.title ? { title: u.profile.title } : {}), ...(u.is_bot ? { bot: true } : {}) };
+    const avatar = u.profile?.image_72 ?? u.profile?.image_48 ?? u.profile?.image_32;
+    people[u.id] = { id: u.id, name: u.name, display, initials: initialsOf(display), ...(u.profile?.title ? { title: u.profile.title } : {}), ...(u.is_bot ? { bot: true } : {}), ...(avatar ? { avatar } : {}) };
   }
   const byName = (n: string) => Object.values(people).find((p) => p.name === n)?.display ?? n;
   const channels: Channel[] = (convs.channels ?? []).map((c: any): Channel => {
@@ -125,8 +126,10 @@ function normalizeAttachment(a: any, meta: Meta): Attachment | undefined {
 }
 
 export function normalizeMessage(m: any, channel: Channel, meta: Meta): Message {
-  const person = meta.people[m.user] ?? (m.username ? { id: m.user ?? "", name: m.username, display: m.username, initials: initialsOf(m.username) } : undefined);
-  const bot = Boolean(m.subtype === "bot_message" || (m.bot_id && !m.user) || person?.bot);
+  // An app's post (Linear, GitHub…) carries a username but no user id; the app is still a member in users.list, with its icon.
+  const byName = (name?: string) => (name ? Object.values(meta.people).find((p) => p.display.toLowerCase() === name.toLowerCase() || p.name.toLowerCase() === name.toLowerCase()) : undefined);
+  const person = meta.people[m.user] ?? byName(m.username) ?? byName(m.bot_profile?.name) ?? (m.username ? { id: m.user ?? "", name: m.username, display: m.username, initials: initialsOf(m.username) } : undefined);
+  const bot = Boolean(m.subtype === "bot_message" || (m.bot_id && !m.user) || (m.username && !m.user) || person?.bot);
   const attachments = (Array.isArray(m.attachments) ? m.attachments : []).map((a: any) => normalizeAttachment(a, meta)).filter(Boolean) as Attachment[];
   // An app's name comes from its bot profile or username; Linear-style webhook posts carry neither, so the attachment's footer or the link's host stands in.
   const appName = m.bot_profile?.name ?? m.username ?? attachments.find((a) => a.footer)?.footer ?? (attachments.find((a) => a.link)?.link?.match(/^https?:\/\/(?:www\.)?([^./]+)/)?.[1]);
@@ -140,7 +143,7 @@ export function normalizeMessage(m: any, channel: Channel, meta: Meta): Message 
   return {
     ref: `${channel.id}/${m.ts}`, channel: channel.id, channelName: channel.name, ts: m.ts, ...(threadTs ? { threadTs } : {}),
     time: new Date(Number(m.ts) * 1000).toISOString(),
-    ...(m.user ? { userId: m.user } : {}), user, initials: person?.initials ?? initialsOf(user), ...(bot ? { bot: true } : {}),
+    ...(m.user ? { userId: m.user } : {}), user, initials: person?.initials ?? initialsOf(user), ...((person?.avatar ?? m.bot_profile?.icons?.image_72 ?? m.bot_profile?.icons?.image_48 ?? m.icons?.image_72 ?? m.icons?.image_48) ? { avatar: person?.avatar ?? m.bot_profile?.icons?.image_72 ?? m.bot_profile?.icons?.image_48 ?? m.icons?.image_72 ?? m.icons?.image_48 } : {}), ...(bot ? { bot: true } : {}),
     text: plainText(raw, meta.people, meta.channels), raw, attachments,
     reactions: (m.reactions ?? []).map((r: any) => ({ name: r.name, count: r.count, mine: (r.users ?? []).includes(meta.me) })),
     replyCount: m.reply_count ?? 0, ...(m.permalink ? { permalink: m.permalink } : {}),
