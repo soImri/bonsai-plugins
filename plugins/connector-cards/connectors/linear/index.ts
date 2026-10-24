@@ -61,7 +61,7 @@ export const linear = defineConnector({
     const picked = `${comp.view} view, scope ${comp.scope}${how}, sorted by ${comp.sort}`;
     void who;
     if (!issues.length) return { summary: `No ${comp.scope === "all" ? "" : `${comp.scope} `}issues in ${team.key} match. Say so in five words or fewer.`, payload, picked, offered: fu.actions, remember: comp };
-    return { summary: `Card shown (${issues.length} ${team.key} issue${issues.length === 1 ? "" : "s"}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions, remember: comp };
+    return { summary: `Card shown (${issues.length} ${team.key} issue${issues.length === 1 ? "" : "s"}). Reply with nothing: the card is the whole answer, and the person navigates inside it. Do not write a sentence about the card. End your turn now.`, payload, picked, offered: fu.actions, remember: comp };
   },
 
   async record({ token, params, signal, startedAt, cache, followUps, context }: Run): Promise<CardResult> {
@@ -74,7 +74,7 @@ export const linear = defineConnector({
     const full = { ...issue, options: optionsOf(meta), ...(params.draft ? { commentDraft: params.draft } : {}) };
     const task = `${ref}${context ? ` (${context})` : ""}`;
     const fu = await followUps("linear-follow-ups", { task: ref, issue: { title: issue.title, state: issue.state.name, priority: issue.priority, assignee: issue.assignee ?? "none", labels: issue.labels.join(", ") || "none", project: issue.project ?? "none" } }, issueFollowUps(task, full));
-    return { summary: `Card shown (${issue.identifier}). Reply with nothing.`, payload: { kind: "issue", issue: full, followUps: fu.actions, timing: { linear: tLinear, jev: fu.took } }, picked: `issue${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions, remember: { by: fu.by } };
+    return { summary: `Card shown (${issue.identifier}). Reply with nothing: no sentence about the card. End your turn now.`, payload: { kind: "issue", issue: full, followUps: fu.actions, timing: { linear: tLinear, jev: fu.took } }, picked: `issue${fu.actions.length ? `, follow-ups ${fu.actions.join(", ")}` : ""}`, offered: fu.actions, remember: { by: fu.by } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -89,7 +89,7 @@ export const linear = defineConnector({
     const summary = [draft.state, PRIORITY_NAMES[draft.priority], draft.project, draft.labels.join(", "), draft.assignee].filter(Boolean).join(" · ");
     void tLinear; void tJev;
     return {
-      summary: `Create dialog shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Create in ${team.key}:' arrives, call cards_apply with it verbatim in \`message\`.`,
+      summary: `Create dialog shown. Reply with nothing and end your turn; do not describe the draft or tell the person what to press. When a message starting 'Create in ${team.key}:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft, picks: { by: picks.by, confidence: picks.confidence }, timing: { linear: tLinear, jev: tJev } },
       picked: summary,
     };
@@ -119,7 +119,7 @@ export const linear = defineConnector({
     const used = [...new Set([...changes.flatMap((c) => ["state" in c ? "status" : "", "priority" in c ? "priority" : "", "assignee" in c ? "assignee" : "", "labels" in c ? "labels" : "", "project" in c ? "project" : ""].filter(Boolean)), ...(comment ? ["comment"] : []), ...(create ? ["create"] : [])])];
     const comp: Composition = { view: fresh.length === 1 ? "issue" : "list", groupBy: "status", sort: "none", scope: "all", fields: { description: fresh.length === 1, labels: true, dates: false, assignee: true, project: true }, by: "fallback", followUps: [] };
     return {
-      summary: `Saved to Linear: ${applied.join("; ")}. The card shows the result; reply with nothing.`,
+      summary: `Saved to Linear: ${applied.join("; ")}. The card shows the result; reply with nothing: no sentence about it. End your turn now.`,
       payload: { kind: "view", task: "Saved", team: meta.key, issues: fresh, options: optionsOf(meta), composition: comp, applied, timing: { linear: tWrite } },
       ...(correction ? { correction: `created with ${correction}` } : {}), used,
     };

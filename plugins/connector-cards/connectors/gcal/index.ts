@@ -155,7 +155,9 @@ export const gcal = defineConnector({
     // The card navigates inside what we fetch, so fetch a superset: two weeks back and ahead, plus this month's and next month's grids.
     const nextGrid = monthGrid(now, tz, 1);
     const superset: [Date, Date] = [new Date(Math.min(dayStart(now, tz, pastWanted ? -7 : -14).getTime(), grid.gridStart.getTime())), new Date(Math.max(dayStart(now, tz, 14).getTime(), nextGrid.gridEnd.getTime()))];
-    let window: [Date, Date] = date ? dayBounds(date, tz) : superset;
+    const freeAsk = viewRubric(task, [], tz, now).guess.view === "free";
+    // A find-a-time on a named day shows that day first plus the next few days as context; fetch them too.
+    let window: [Date, Date] = date ? (freeAsk ? [dayBounds(date, tz)[0], dayStart(dayBounds(date, tz)[0], tz, 5)] : dayBounds(date, tz)) : superset;
     void wantsMonth;
     let all: Event[];
     if (refs.length) all = (await Promise.all(refs.map((r) => eventByRef(token, cache, calendars, r, signal)))).filter(Boolean) as Event[];
@@ -192,11 +194,11 @@ export const gcal = defineConnector({
     let extra: Record<string, unknown> = {};
     if (comp.view === "free") {
       // Availability: Google's freeBusy over the range, then the open slots between busy blocks in working hours.
-      const [ff, ft] = isMonth ? [now, g.next] : [new Date(Math.max(from.getTime(), now.getTime())), to.getTime() > now.getTime() ? to : dayStart(now, tz, 7)];
+      const [ff, ft] = isMonth ? [now, g.next] : date ? [new Date(Math.max(from.getTime(), now.getTime())), dayStart(from, tz, 5)] : [new Date(Math.max(from.getTime(), now.getTime())), to.getTime() > now.getTime() ? to : dayStart(now, tz, 7)];
       const busyMap = await freeBusy(token, calendars.map((c) => c.id), ff, ft, signal);
       const busy = Object.values(busyMap).flat();
       const slotMin = Number(task.match(/\b(\d{2,3})\s*(?:min|minutes)\b/i)?.[1] ?? (/\b(an? hour|1 ?h|60 ?min)\b/i.test(task) ? 60 : 30));
-      const days = freeSlots(busy, all, ff, ft, now, tz, slotMin);
+      const days = freeSlots(busy, all, ff, ft, now, tz, slotMin).slice(0, date ? 3 : undefined);
       extra = { free: { days, suggested: suggest(days, slotMin), slotMinutes: slotMin, workday: WORKDAY, from: wall(ff.toISOString(), tz), to: wall(ft.toISOString(), tz), seed: { title: titleFromAsk(task), meet: /\b(call|zoom|meet|video|remote|online)\b/i.test(task) }, calendars: meta.calendars.filter((c) => c.writable).map((c) => ({ id: c.id, name: c.name, color: c.color, primary: c.primary })) } };
     }
     const monthInfo = (mg: ReturnType<typeof monthGrid>) => ({ label: new Date(mg.first.getTime() + 36e5 * 12).toLocaleDateString("en-US", { timeZone: tz, month: "long", year: "numeric" }), gridStart: wall(mg.gridStart.toISOString(), tz).slice(0, 10), gridEnd: wall(mg.gridEnd.toISOString(), tz).slice(0, 10), first: wall(mg.first.toISOString(), tz).slice(0, 10), next: wall(mg.next.toISOString(), tz).slice(0, 10) });
@@ -207,8 +209,8 @@ export const gcal = defineConnector({
     const picked = `${comp.view}, range ${comp.range}${comp.fields.attendees ? ", with guests" : ""}${comp.fields.location ? ", with locations" : ""}${comp.fields.invitesOnly ? ", invites only" : ""}`;
     const viewName = comp.view === "event" ? "an event card" : comp.view === "month" ? "a month grid" : comp.view === "free" ? "a find-a-time view" : "an agenda";
     void who; void viewName;
-    if (!events.length && comp.view !== "free") return { summary: `No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${rangeLabel.toLowerCase()}; the card says so and offers other ranges. Reply with nothing.`, payload, picked, offered: fu.actions, remember: comp };
-    return { summary: `Card shown (${comp.view === "free" ? "find a time" : `${events.length} event${events.length === 1 ? "" : "s"}, ${rangeLabel}`}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions , remember: comp };
+    if (!events.length && comp.view !== "free") return { summary: `No ${comp.fields.invitesOnly ? "unanswered invitations" : "events"} ${rangeLabel.toLowerCase()}; the card says so and offers other ranges. Reply with nothing: no sentence about the card. End your turn now.`, payload, picked, offered: fu.actions, remember: comp };
+    return { summary: `Card shown (${comp.view === "free" ? "find a time" : `${events.length} event${events.length === 1 ? "" : "s"}, ${rangeLabel}`}). Reply with nothing: the card is the whole answer, and the person navigates inside it. Do not write a sentence about the card. End your turn now.`, payload, picked, offered: fu.actions , remember: comp };
   },
 
   async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
@@ -216,7 +218,7 @@ export const gcal = defineConnector({
     const ev = await eventByRef(token, cache, meta.calendars, String(params.ref ?? ""), signal);
     if (!ev) throw new Error(`No event matches "${params.ref}" in the next two weeks.`);
     await rememberKeys(cache, [ev]);
-    return { summary: `Card shown ("${ev.title}"). Reply with nothing.`, payload: { kind: "event", timeZone: meta.timeZone, event: ev, calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), timing: { google: ms(startedAt) } } };
+    return { summary: `Card shown ("${ev.title}"). Reply with nothing: no sentence about the card. End your turn now.`, payload: { kind: "event", timeZone: meta.timeZone, event: ev, calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), timing: { google: ms(startedAt) } } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -237,7 +239,7 @@ export const gcal = defineConnector({
     const calendar = calendarFor(meta.calendars, f.calendar ?? picks.calendar);
     const draft = { title, description: params.body?.trim() ?? "", start, end: endWall, allDay, attendees, location: f.location ?? "", meet: typeof f.meet === "boolean" ? f.meet : picks.meet, calendar: calendar?.id, calendarName: calendar?.name, timeZone: tz  };
     return {
-      summary: `Create dialog shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Create event:' arrives, call cards_apply with it verbatim in \`message\`.`,
+      summary: `Create dialog shown. Reply with nothing and end your turn; do not describe the draft or tell the person what to press. When a message starting 'Create event:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft, calendars: meta.calendars.filter((c) => c.writable).map((c) => ({ id: c.id, name: c.name, color: c.color, primary: c.primary })), picks: { by: picks.by, confidence: picks.confidence }, timing: { google: tGoogle, jev: tJev } },
       picked: `${allDay ? "all day" : `${picks.durationMin} min`}${draft.meet ? ", Meet" : ""}, calendar ${calendar?.name ?? "primary"}`,
     };
@@ -290,7 +292,7 @@ export const gcal = defineConnector({
     const used = [...new Set([...changes.flatMap((c) => [c.start !== undefined || c.end !== undefined ? "reschedule" : "", c.guests !== undefined ? "guests" : "", c.title !== undefined || c.location !== undefined ? "details" : ""].filter(Boolean)), ...(rsvpReq ? ["rsvp"] : []), ...(create ? ["create"] : []), ...(del ? ["delete"] : [])])];
     const comp: Composition = { view: fresh.length === 1 ? "event" : "agenda", range: "next_14_days", fields: { attendees: true, location: true, description: fresh.length === 1, past: true, invitesOnly: false }, by: "fallback" , followUps: [] };
     return {
-      summary: `Saved to Google Calendar: ${applied.join("; ")}. The card shows the result; reply with nothing.`,
+      summary: `Saved to Google Calendar: ${applied.join("; ")}. The card shows the result; reply with nothing: no sentence about it. End your turn now.`,
       payload: fresh.length === 1 ? { kind: "event", timeZone: tz, event: fresh[0], calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), applied, timing: { google: tWrite } } : { kind: "view", task: "Saved", timeZone: tz, now: wall(new Date().toISOString(), tz), calendars: meta.calendars.map((c) => ({ id: c.id, name: c.name, color: c.color, writable: c.writable, primary: c.primary })), events: fresh, composition: comp, applied, timing: { google: tWrite } },
       ...(typeof correction === "string" ? { correction } : {}), used,
     };

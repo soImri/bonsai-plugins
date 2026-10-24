@@ -94,8 +94,8 @@ export const slack = defineConnector({
     const payload = { kind: "view", task, me: meta.me, view, ...(channel ? { channel: channelInfo(channel) } : {}), ...(ts ? { threadTs: ts } : {}), messages, conversations: conversationsFor(meta), composition: comp, via, timing: { slack: tSlack, jev: tJev } };
     const picked = `${view}, ${comp.range}, ${comp.focus}`;
     const label = view === "thread" ? "thread" : view === "channel" ? `#${channel!.name}` : `inbox (${RANGE_LABEL[comp.range]}${comp.focus !== "all" ? `, ${comp.focus}` : ""})`;
-    if (!messages.length) return { summary: `No messages for ${label}; the card says so. Reply with nothing.`, payload, picked, offered: fu.actions, remember: comp };
-    return { summary: `Card shown (${shown.length} messages, ${label}). Reply with nothing: the card is the whole answer, and the person navigates inside it.`, payload, picked, offered: fu.actions, remember: comp };
+    if (!messages.length) return { summary: `No messages for ${label}; the card says so. Reply with nothing: no sentence about the card. End your turn now.`, payload, picked, offered: fu.actions, remember: comp };
+    return { summary: `Card shown (${shown.length} messages, ${label}). Reply with nothing: the card is the whole answer, and the person navigates inside it. Do not write a sentence about the card. End your turn now.`, payload, picked, offered: fu.actions, remember: comp };
   },
 
   async record({ token, params, signal, startedAt, cache }: Run): Promise<CardResult> {
@@ -106,10 +106,10 @@ export const slack = defineConnector({
     if (!c) throw new Error(`No Slack conversation matches "${ref}". Channels you can name: ${meta.channels.filter((x) => x.kind !== "dm").slice(0, 12).map((x) => `#${x.name}`).join(", ")}.`);
     if (ts) {
       const messages = await readThread(token, meta, c, ts, signal);
-      return { summary: `Card shown (thread in #${c.name}). Reply with nothing.`, payload: { kind: "view", view: "thread", me: meta.me, channel: channelInfo(c), threadTs: ts, messages, conversations: conversationsFor(meta), composition: { view: "thread", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: "replies", ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
+      return { summary: `Card shown (thread in #${c.name}). Reply with nothing: no sentence about the card. End your turn now.`, payload: { kind: "view", view: "thread", me: meta.me, channel: channelInfo(c), threadTs: ts, messages, conversations: conversationsFor(meta), composition: { view: "thread", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: "replies", ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
     }
     const r = await readChannel(token, meta, c, 14, signal);
-    return { summary: `Card shown (#${c.name}). Reply with nothing.`, picked: "channel", payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
+    return { summary: `Card shown (#${c.name}). Reply with nothing: no sentence about the card. End your turn now.`, picked: "channel", payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -125,7 +125,7 @@ export const slack = defineConnector({
       : await jev({ purpose: "slack-draft" }, async (j) => { const { answers, variant } = await classify(j, state, rubric.questions); return rubric.read(answers, variant); }, rubric.guess) as { value: Picks; took: string };
     const channel = meta.channels.find((c) => c.id === picks.channel) ?? candidates[0];
     return {
-      summary: `Composer shown. Reply with nothing and stop; do not describe the draft or tell the person what to press. When a message starting 'Post in #…:' arrives, call cards_apply with it verbatim in \`message\`.`,
+      summary: `Composer shown. Reply with nothing and end your turn; do not describe the draft or tell the person what to press. When a message starting 'Post in #…:' arrives, call cards_apply with it verbatim in \`message\`.`,
       payload: { kind: "draft", draft: { channel: channel ? channelInfo(channel) : undefined, text }, conversations: conversationsFor(meta), picks: { by: picks.by, confidence: picks.confidence }, timing: { slack: ms(startedAt), jev: tJev } },
       picked: channel ? `${channel.kind === "dm" ? "DM " : "#"}${channel.name}` : "no channel",
     };
@@ -153,7 +153,7 @@ export const slack = defineConnector({
     if (threadTs && !post) { messages = await readThread(token, meta, target, threadTs, signal); via = "replies"; view = "thread"; }
     else { const r = await readChannel(token, meta, target, 14, signal); messages = r.messages; via = r.via; view = "channel"; }
     return {
-      summary: `Sent to Slack: ${applied.join("; ")}. The card shows the result; reply with nothing.`, used,
+      summary: `Sent to Slack: ${applied.join("; ")}. The card shows the result; reply with nothing: no sentence about it. End your turn now.`, used,
       payload: { kind: "view", view, me: meta.me, channel: channelInfo(target), ...(threadTs && !post ? { threadTs } : {}), messages, conversations: conversationsFor(meta), composition: { view, range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via, applied, timing: { slack: tWrite } },
     };
   },

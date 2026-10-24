@@ -154,9 +154,10 @@ const NEIGHBOUR: Record<string, string[]> = { today: ["tomorrow"], tomorrow: ["r
 /** The asked range + its neighbour, "Invites · N" when invitations are pending, plus what Jev added (find / month); the golden set for a general look. */
 export function chipsFor(comp: { view: string; range: string; fields: { invitesOnly?: boolean } }, picked: string[], pendingInvites: number): string[] {
   if (picked.includes("full_navigation")) return GOLDEN_CHIPS.filter((k) => k !== "invites" || pendingInvites > 0 || comp.fields.invitesOnly);
-  const active = comp.view === "free" ? "free" : comp.fields.invitesOnly ? "invites" : comp.range;
+  // A find-a-time card navigates by its own day grid; a range chip beside it ("This week") is noise.
+  if (comp.view === "free") return CHIP_ORDER.filter((k) => k === "free" || (k === "this_month" && picked.includes("month")));
+  const active = comp.fields.invitesOnly ? "invites" : comp.range;
   const set = new Set<string>([active, ...(NEIGHBOUR[comp.range] ?? [])]);
-  if (comp.view === "free") set.add("rest_of_week");
   if (pendingInvites > 0) set.add("invites");
   if (picked.includes("find")) set.add("free");
   if (picked.includes("month")) set.add("this_month");

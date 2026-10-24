@@ -24,7 +24,7 @@
 | Screen | Native controls (always) | Follow-up candidates (`when`) |
 | --- | --- | --- |
 | Event | click-to-edit title, time, location, guests; Join Meet; RSVP row when invited; Save | none |
-| Agenda / month / find a time | navigation chips cut to the ask (asked range + neighbour; Invites · N when pending; Find a time / Month when Jev adds them; the golden set for "show my calendar"), rows expand in place, day panel, slot picking | `create`: a `+ New event` button opens the create dialog in the card (planning, blocking time, a prep block the context names) |
+| Agenda / month / find a time | navigation chips cut to the ask (asked range + neighbour; Invites · N when pending; Find a time / Month when Jev adds them; the golden set for "show my calendar"; a find-a-time card has no range chip at all, its day grid is the navigation; a named day shows that day first plus two more), rows expand in place, day panel, slot picking | `create`: a `+ New event` button opens the create dialog in the card (planning, blocking time, a prep block the context names) |
 | Create | title, date and time, all-day, guests, Meet, location, notes, calendar | none |
 
 **Card messages:** `Save event #a1b2c3: title → …; start → 2026-10-24 15:00; end → …; location → …; guests → …; meet → yes` · `Create event: <title>` + properties line + optional `Notes:` block · `RSVP #a1b2c3: yes|no|maybe` · `Delete event #a1b2c3` · `Show event #a1b2c3`.
