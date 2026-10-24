@@ -714,53 +714,113 @@ var minsOf = (w) => {
 };
 var wallAt = (date, mins) => `${date} ${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
 var hourLabel = (h) => `${(h + 11) % 12 + 1} ${h >= 12 ? "PM" : "AM"}`;
-function FreeTime({ ctx, caption, chips }) {
+function FreeTime({ ctx, caption, chips, resetKey }) {
   const d = ctx.details ?? {};
+  const reset = resetKey ?? d;
   const f = d.free ?? {};
   const days = Array.isArray(f.days) ? f.days : [];
   const today = (d.now ?? "").slice(0, 10);
-  const [duration, setDuration] = useState3(f.slotMinutes ?? 30);
   const [page, setPage] = useState3(0);
   const [chosen, setChosen] = useState3(null);
   const [drafting, setDrafting] = useState3(false);
+  const gridRef = useRef3(null);
+  const drag = useRef3(null);
+  const [live, setLive] = useState3(null);
   useEffect3(() => {
-    setDuration(f.slotMinutes ?? 30);
     setChosen(null);
+    setLive(null);
     setDrafting(false);
     setPage(0);
-  }, [d]);
+  }, [reset]);
   if (!days.length) return <ErrorCard message="No working days in that range." />;
   const perPage = 5;
   const shown = days.slice(page * perPage, page * perPage + perPage);
   const totalMins = (GRID.end - GRID.start) * 60;
   const top = (w) => (minsOf(w) - GRID.start * 60) / totalMins * 100;
   const height = (a, b) => (minsOf(b) - minsOf(a)) / totalMins * 100;
-  const fits = (day, startMin) => day.free.some((g) => minsOf(g.start) <= startMin && startMin + duration <= minsOf(g.end));
-  const place = (day, e) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    const mins = Math.round(((e.clientY - r.top) / r.height * totalMins + GRID.start * 60) / 15) * 15;
-    const start = Math.max(GRID.start * 60, Math.min(mins, GRID.end * 60 - duration));
-    setChosen({ date: day.date, weekday: day.weekday, start: wallAt(day.date, start), end: wallAt(day.date, start + duration) });
+  const STEP = 15, MIN = 15, LABEL_W = 52;
+  const clampMin = (m) => Math.max(GRID.start * 60, Math.min(GRID.end * 60, m));
+  const snap = (m) => Math.round(m / STEP) * STEP;
+  const locate = (clientX, clientY) => {
+    const r = gridRef.current.getBoundingClientRect();
+    const colW = (r.width - LABEL_W) / shown.length;
+    const dayIx = Math.max(0, Math.min(shown.length - 1, Math.floor((clientX - r.left - LABEL_W) / colW)));
+    const at = snap((clientY - r.top) / r.height * totalMins + GRID.start * 60);
+    return { dayIx, at };
   };
-  const suggested = (Array.isArray(f.suggested) ? f.suggested : []).map((s) => ({ ...s, end: wallAt(s.date, minsOf(s.start) + duration) }));
-  const chosenFits = chosen ? fits(days.find((x) => x.date === chosen.date), minsOf(chosen.start)) : false;
+  const slotOf = (dayIx, s, en) => ({ date: shown[dayIx].date, weekday: shown[dayIx].weekday, start: wallAt(shown[dayIx].date, s), end: wallAt(shown[dayIx].date, en) });
+  const fits = (slot) => {
+    const day = days.find((x) => x.date === slot.date);
+    const s = minsOf(slot.start), e = minsOf(slot.end);
+    return Boolean(day?.free.some((g) => minsOf(g.start) <= s && e <= minsOf(g.end)));
+  };
+  const block = live ?? chosen;
+  const duration = block ? minsOf(block.end) - minsOf(block.start) : f.slotMinutes ?? 30;
+  const begin = (kind, e) => {
+    if (drag.current || !gridRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { dayIx, at } = locate(e.clientX, e.clientY);
+    const slot = f.slotMinutes ?? 30;
+    const cur = kind !== "draw" && chosen ? chosen : null;
+    const curIx = cur ? shown.findIndex((x) => x.date === cur.date) : dayIx;
+    const ix = cur && curIx >= 0 ? curIx : dayIx;
+    const startMin = cur ? minsOf(cur.start) : clampMin(Math.min(at, GRID.end * 60 - slot));
+    const endMin = cur ? minsOf(cur.end) : clampMin(startMin + slot);
+    const first = slotOf(ix, startMin, endMin);
+    drag.current = { kind, dayIx: ix, anchorMin: at, anchorDay: dayIx, startMin, endMin, last: first };
+    setLive(first);
+    try {
+      gridRef.current.setPointerCapture(e.pointerId);
+    } catch {
+    }
+  };
+  const during = (e) => {
+    const g = drag.current;
+    if (!g) return;
+    const { dayIx, at } = locate(e.clientX, e.clientY);
+    let s = g.startMin, en = g.endMin, ix = g.dayIx;
+    if (g.kind === "draw") {
+      s = clampMin(Math.min(g.anchorMin, at));
+      en = clampMin(Math.max(g.anchorMin, at));
+      if (en - s < MIN) {
+        if (at >= g.anchorMin) en = clampMin(s + MIN);
+        else s = clampMin(en - MIN);
+      }
+    } else if (g.kind === "move") {
+      const len = g.endMin - g.startMin;
+      s = Math.max(GRID.start * 60, Math.min(GRID.end * 60 - len, g.startMin + (at - g.anchorMin)));
+      en = s + len;
+      ix = Math.max(0, Math.min(shown.length - 1, g.dayIx + (dayIx - g.anchorDay)));
+    } else en = clampMin(Math.max(g.startMin + MIN, g.endMin + (at - g.anchorMin)));
+    g.last = slotOf(ix, s, en);
+    setLive(g.last);
+  };
+  const finish = (e) => {
+    const g = drag.current;
+    if (!g) return;
+    try {
+      gridRef.current?.releasePointerCapture(e.pointerId);
+    } catch {
+    }
+    drag.current = null;
+    setChosen(g.last);
+    setLive(null);
+  };
+  const suggested = (Array.isArray(f.suggested) ? f.suggested : []).map((s) => ({ ...s, end: wallAt(s.date, Math.min(GRID.end * 60, minsOf(s.start) + duration)) }));
+  const chosenFits = block ? fits(block) : false;
   const draftDetails = useMemo2(() => {
     if (!chosen) return null;
     const seed = f.seed ?? {};
     const draft = { title: seed.title ?? "New event", start: chosen.start, end: chosen.end, allDay: false, attendees: [], meet: Boolean(seed.meet), calendar: f.calendars?.find((c) => c.primary)?.id, timeZone: d.timeZone };
     return { ...d, kind: "draft", draft, calendars: f.calendars ?? [], picks: void 0 };
-  }, [chosen?.start, chosen?.end, d]);
+  }, [chosen?.start, chosen?.end, reset]);
   if (drafting && draftDetails) return <NewEventCard ctx={{ ...ctx, details: draftDetails }} onBack={() => setDrafting(false)} />;
   return <section style={{ ...card, maxWidth: 760 }}>
       <div style={{ ...pad, gap: 10, paddingBottom: 10 }}>
         {chips}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <span style={{ fontSize: 15, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 10 }}>Find a time
-            <Picker items={[15, 30, 45, 60, 90]} value={duration} onPick={(m) => {
-    setDuration(m);
-    setChosen(null);
-  }} label="Duration" lead={() => <ClockGlyph />} keyOf={(m) => String(m)} labelOf={(m) => `${m} min`} />
-          </span>
+          <span style={{ fontSize: 15, fontWeight: 600 }}>Find a time</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, ...muted, fontSize: 12 }}>
             <span>{caption}</span>
             {days.length > perPage ? <><Button variant="secondary" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} aria-label="Earlier days">‹</Button><Button variant="secondary" size="sm" disabled={(page + 1) * perPage >= days.length} onClick={() => setPage((p) => p + 1)} aria-label="Later days">›</Button></> : null}
@@ -779,14 +839,18 @@ function FreeTime({ ctx, caption, chips }) {
         {
     /* the grid */
   }
-        <div style={{ display: "grid", gridTemplateColumns: `52px repeat(${shown.length}, 1fr)`, height: (GRID.end - GRID.start) * GRID.rowPx, borderTop: `1px solid ${v("border")}` }}>
+        <div ref={gridRef} onPointerMove={during} onPointerUp={finish} onPointerCancel={finish} style={{ display: "grid", gridTemplateColumns: `${LABEL_W}px repeat(${shown.length}, 1fr)`, height: (GRID.end - GRID.start) * GRID.rowPx, borderTop: `1px solid ${v("border")}`, touchAction: "none", userSelect: "none" }}>
           <div style={{ position: "relative" }}>
             {Array.from({ length: GRID.end - GRID.start }, (_, i) => <div key={i} style={{ position: "absolute", top: i * GRID.rowPx - 7, right: 8, ...muted, fontSize: 10 }}>{i === 0 ? "" : hourLabel(GRID.start + i)}</div>)}
           </div>
-          {shown.map((day) => <div key={day.date} onClick={(e) => place(day, e)} title="Click to place the meeting" style={{ position: "relative", borderLeft: `1px solid ${v("border")}`, cursor: "crosshair", backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${GRID.rowPx - 1}px, ${v("border")} ${GRID.rowPx - 1}px, ${v("border")} ${GRID.rowPx}px)` }}>
+          {shown.map((day) => <div key={day.date} onPointerDown={(e) => begin("draw", e)} title="Drag to draw the meeting" style={{ position: "relative", borderLeft: `1px solid ${v("border")}`, cursor: "crosshair", backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${GRID.rowPx - 1}px, ${v("border")} ${GRID.rowPx - 1}px, ${v("border")} ${GRID.rowPx}px)` }}>
               {day.free.map((g) => <div key={g.start} style={{ position: "absolute", left: 0, right: 0, top: `${top(g.start)}%`, height: `${height(g.start, g.end)}%`, background: "color-mix(in srgb, var(--kay-color-success) 10%, transparent)" }} />)}
               {day.busy.map((b, i) => <div key={i} title={`${b.title ?? "Busy"} \xB7 ${fmtTime(b.start)} \u2013 ${fmtTime(b.end)}`} style={{ position: "absolute", left: 2, right: 2, top: `${top(b.start)}%`, height: `${Math.max(2, height(b.start, b.end))}%`, borderRadius: 4, background: DEFAULT_COLOR, color: "white", fontSize: 10, lineHeight: "13px", padding: "1px 4px", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", pointerEvents: "none" }}>{b.title ?? "Busy"}</div>)}
-              {chosen?.date === day.date ? <div style={{ position: "absolute", left: 2, right: 2, top: `${top(chosen.start)}%`, height: `${height(chosen.start, chosen.end)}%`, borderRadius: 4, border: `2px dashed ${chosenFits ? v("accent") : v("danger")}`, background: chosenFits ? "color-mix(in srgb, var(--kay-color-accent) 18%, transparent)" : "color-mix(in srgb, var(--kay-color-danger) 12%, transparent)", color: v("text-primary"), fontSize: 10, lineHeight: "13px", padding: "1px 4px", overflow: "hidden", whiteSpace: "nowrap", pointerEvents: "none" }}>{f.seed?.title ?? "New event"} · {fmtTime(chosen.start)}</div> : null}
+              {block?.date === day.date ? <div onPointerDown={(e) => begin("move", e)} title="Drag to move" style={{ position: "absolute", left: 2, right: 2, top: `${top(block.start)}%`, height: `${height(block.start, block.end)}%`, borderRadius: 4, border: `2px ${live ? "solid" : "dashed"} ${chosenFits ? v("accent") : v("danger")}`, background: chosenFits ? "color-mix(in srgb, var(--kay-color-accent) 22%, transparent)" : "color-mix(in srgb, var(--kay-color-danger) 14%, transparent)", color: v("text-primary"), fontSize: 10, lineHeight: "13px", padding: "1px 4px", overflow: "hidden", whiteSpace: "nowrap", cursor: live ? "grabbing" : "grab", boxSizing: "border-box" }}>
+                  <div style={{ fontWeight: 600, pointerEvents: "none" }}>{f.seed?.title ?? "New event"}</div>
+                  <div style={{ pointerEvents: "none" }}>{fmtTime(block.start)} – {fmtTime(block.end)}</div>
+                  <div onPointerDown={(e) => begin("resize", e)} title="Drag to change the length" style={{ position: "absolute", left: 0, right: 0, bottom: -3, height: 8, cursor: "ns-resize" }} />
+                </div> : null}
             </div>)}
         </div>
         {
@@ -795,10 +859,10 @@ function FreeTime({ ctx, caption, chips }) {
         {suggested.length ? <div style={{ ...row, gap: 6 }}>
             <span style={{ ...muted, fontSize: 12 }}>Suggested times</span>
             {suggested.map((s) => <Button key={`${s.date}${s.start}`} variant={chosen?.start === s.start ? "primary" : "secondary"} size="sm" onClick={() => setChosen(s)}>{s.weekday} {fmtDay(s.date).split(", ")[1]}, {fmtTime(s.start)}</Button>)}
-          </div> : <div style={{ ...muted, fontSize: 12 }}>No open {duration}-minute slot in working hours; click a day to place one anyway.</div>}
+          </div> : <div style={{ ...muted, fontSize: 12 }}>No open {duration}-minute slot in working hours; drag on a day to place one anyway.</div>}
       </div>
       <div style={footer}>
-        <span style={{ fontSize: 13 }}>{chosen ? <>{fmtDay(chosen.date, true)} · {fmtTime(chosen.start)} – {fmtTime(chosen.end)}{chosenFits ? null : <span style={{ color: v("danger") }}> · overlaps something</span>}</> : <span style={muted}>Click a free spot or a suggested time.</span>}</span>
+        <span style={{ fontSize: 13 }}>{block ? <>{fmtDay(block.date, true)} · {fmtTime(block.start)} – {fmtTime(block.end)} <span style={muted}>({duration} min)</span>{chosenFits ? null : <span style={{ color: v("danger") }}> · overlaps something</span>}</> : <span style={muted}>Drag on a day to draw the meeting, or pick a suggested time. Drag it to move it, or its edge to change the length.</span>}</span>
         <Button variant="primary" size="sm" disabled={!chosen} onClick={() => setDrafting(true)}>Use this time</Button>
       </div>
     </section>;
@@ -915,7 +979,7 @@ function Agenda({ ctx, note }) {
   if (mode === "free") {
     const free = d.free ?? freeFromEvents(all, tz, now, 30);
     const cals = (Array.isArray(d.calendars) ? d.calendars : []).filter((c) => c.writable);
-    return <FreeTime ctx={{ ...ctx, details: { ...d, free: { ...free, seed: free.seed ?? { title: "New event", meet: false }, calendars: free.calendars ?? cals } } }} caption={caption} chips={chips} />;
+    return <FreeTime ctx={{ ...ctx, details: { ...d, free: { ...free, seed: free.seed ?? { title: "New event", meet: false }, calendars: free.calendars ?? cals } } }} caption={caption} chips={chips} resetKey={d} />;
   }
   if (mode === "month" && months[monthIx]) {
     const m = months[monthIx];
