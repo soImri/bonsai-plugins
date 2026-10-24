@@ -35,6 +35,10 @@ In `rubrics.ts` export them as `FollowUp[]` factories. In `index.ts` call `run.f
 
 The test: three asks with different `context` lines produce the same native controls every time and differ only in what was added. Then repeat one plain ask three times: the third must come from memory (`debug.decidedBy: "memory"`, `timing.jev: "0 ms"`).
 
+## 2b″. Writes in the background
+
+A card shows the change first and writes second. Use `useWrite(ctx)` from the kit for every write: set the card's state to the new value, call `w.run(message, { revert })`, and show `writeNote(w)` where a status belongs (the SaveBar's note, a footer line). For a write that creates a record, pass `onDone(details)` and show the created record from the refreshed data the endpoint returns (`details.issues[0]`, `details.event`). Never render a "Saving…" state that blocks the card, and never wait for a new card. The message grammar is the same one `apply` parses, so the background route and the chat fallback are one code path on the plugin side.
+
 ## 2c. Navigation is tailored; the screen is not
 
 A list-type card has two layers. The screen (rows, pills, composers, click-to-edit, Save) is the app's own: always complete, always live. The navigation row (range chips, scope tabs, focus filters) is our adaptation and is cut to the ask: the asked range or scope plus its neighbour, peripheral information only when it exists (a pending-invites count), plus what Jev adds for this ask. The full set, the *golden* navigation, is drawn only for a general look ("show my calendar"), via a `full_navigation` candidate in the follow-up rubric. Compute the set in `rubrics.ts` (see `chipsFor` in gcal, `scopesFor` in linear, `inboxChips` in slack), put it on the composition, and draw exactly that in `ui.tsx`. A row with one chip is not drawn. Add evals that pin the set for a named ask and the golden set for a general one.

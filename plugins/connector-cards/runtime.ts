@@ -417,3 +417,33 @@ export function registerCards(api: any, connectors: Connector[]) {
     });
   }
 }
+
+/* ---------- the background route: a card writes without the chat ---------- */
+/**
+ * A card's quick action (a reaction, an RSVP) should land in the background while the card shows
+ * the change at once. The plugin's `kay.app` target registers the endpoint `cards.write`; the
+ * card calls it through `kayApi.invokeExtensionEndpoint` with the same message it would otherwise
+ * have sent to the chat, and this runs the connector's `apply` exactly as the tool would. The
+ * agent is not involved and nothing is rendered again.
+ */
+export type ResolveToken = (req: { serviceId: string; schemeId: string; requiredScopes?: readonly string[] }) => Promise<{ ok: true; auth: { accessToken: string; account?: string } } | { ok: false; message?: string }>;
+export async function applyDirect(connectors: Connector[], req: { connector?: string; message?: string; payload?: Record<string, unknown> }, resolveToken: ResolveToken, dataDir: string | undefined): Promise<{ ok: true; applied: string[]; details: Record<string, unknown> } | { ok: false; error: string }> {
+  const startedAt = Date.now();
+  const never: Decide = async (_o, _d, fallback) => ({ value: fallback(), took: "0 ms", by: "fallback" });
+  const picked = await pickConnector(connectors, "apply", { connector: req.connector, message: req.message, payload: req.payload }, never);
+  if ("error" in picked) return { ok: false, error: picked.error };
+  const { connector } = picked;
+  const auth = await resolveToken({ serviceId: connector.auth.serviceId, schemeId: connector.auth.schemeId, ...(connector.auth.requiredScopes ? { requiredScopes: connector.auth.requiredScopes } : {}) });
+  if (!auth.ok) return { ok: false, error: auth.message ?? `${connector.label} is not connected.` };
+  try {
+    const root = diskCache(dataDir);
+    const run: Run = { connector, token: auth.auth.accessToken, account: auth.auth.account as Record<string, unknown> | undefined, params: { ...(req.message ? { message: req.message } : {}), ...(req.payload ? { payload: req.payload } : {}) }, signal: undefined, startedAt, jev: never, cache: diskCache(dataDir ? `${dataDir}/${connector.id}` : undefined), history: [], context: "", followUps: async () => ({ actions: [], by: "fallback", took: "0 ms" }) };
+    const { payload, used } = await connector.apply(run);
+    if (used?.length) await noteUsed(root, connector.id, used, true);
+    const applied = Array.isArray((payload as any).applied) ? ((payload as any).applied as string[]) : [];
+    return { ok: true, applied, details: { ...payload, connector: connector.id, connectorLabel: connector.label, timing: { ...((payload.timing as object) ?? {}), total: ms(startedAt) } } };
+  } catch (err) {
+    const e = err as Error;
+    return { ok: false, error: connector.explain?.(err) ?? e?.message ?? String(err) };
+  }
+}

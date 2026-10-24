@@ -6,7 +6,7 @@
  * (saveLine, createMessage, rsvp, delete) and the parser in step.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ClockGlyph, ErrorCard, LongText, NotesGlyph, OpenExternal, PinGlyph, Picker, Placeholder, SaveBar, Timing, UserGlyph, VideoGlyph, bare, card, footer, hoverable, muted, pad, row, v, type ConnectorUi, type UiCtx, useFollowUps } from "../../ui/kit.tsx";
+import { Button, ClockGlyph, ErrorCard, LongText, NotesGlyph, OpenExternal, PinGlyph, Picker, Placeholder, SaveBar, Timing, UserGlyph, VideoGlyph, bare, card, footer, hoverable, muted, pad, row, v, type ConnectorUi, type UiCtx, useFollowUps, useWrite, writeNote } from "../../ui/kit.tsx";
 
 type Attendee = { email: string; name?: string; response: string; self?: boolean; organizer?: boolean; optional?: boolean };
 type Event = { key: string; id: string; calendar: string; calendarName: string; title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; attendees: Attendee[]; organizer?: string; meet?: string; link?: string; myResponse?: string; color?: string; recurring?: boolean };
@@ -73,10 +73,12 @@ function EventCard({ ctx, event: given, note }: { ctx: UiCtx; event?: Event; not
   const [saved, setSaved] = useState<Edit>(seed);
   const [cur, setCur] = useState<Edit>(seed);
   const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [rsvping, setRsvping] = useState<string | null>(null);
+  const w = useWrite(ctx);
+  const saving = w.status === "saving";
+  // My RSVP as the card shows it: flips at once, the plugin writes it in the background, a failure flips it back.
+  const [myResponse, setMyResponse] = useState<string | undefined>(event?.myResponse);
   const dirty = useRef(false);
-  useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); setEditing(false); } }, [seed]);
+  useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); setEditing(false); } setMyResponse(event?.myResponse); }, [seed]);
   if (!event?.key) return <Placeholder text="No event data." />;
   const changes: string[] = [];
   if (cur.title !== saved.title) changes.push(`title → ${cur.title}`);
@@ -85,8 +87,8 @@ function EventCard({ ctx, event: given, note }: { ctx: UiCtx; event?: Event; not
   if (cur.location !== saved.location) changes.push(`location → ${cur.location.trim() || "none"}`);
   if (cur.guests !== saved.guests) changes.push(`guests → ${cur.guests.trim() || "none"}`);
   dirty.current = changes.length > 0 || editing;
-  async function save() { setSaving(true); const next = cur; await ctx.send(saveLine(event!.key, changes)); setSaved(next); setSaving(false); setEditing(false); }
-  async function rsvp(answer: "yes" | "no" | "maybe") { setRsvping(answer); await ctx.send(`RSVP ${event!.key}: ${answer}`); setRsvping(null); }
+  async function save() { const prev = saved, next = cur; setSaved(next); setEditing(false); await w.run(saveLine(event!.key, changes), { revert: () => { setSaved(prev); setCur(next); setEditing(true); } }); }
+  async function rsvp(answer: "yes" | "no" | "maybe") { const prev = myResponse; setMyResponse(answer === "yes" ? "accepted" : answer === "no" ? "declined" : "tentative"); await w.run(`RSVP ${event!.key}: ${answer}`, { revert: () => setMyResponse(prev) }); }
   const [sd, st] = cur.start.split(" "); const [ed, et] = cur.end.split(" ");
   const sameDay = sd === ed;
   const f = (ctx.details?.composition?.fields ?? {}) as Partial<Composition["fields"]>;
@@ -113,16 +115,16 @@ function EventCard({ ctx, event: given, note }: { ctx: UiCtx; event?: Event; not
         {event.meet ? <Line glyph={<VideoGlyph />}><Button variant="primary" size="sm" onClick={() => ctx.openUrl(event.meet!)}>Join with Google Meet</Button></Line> : null}
         {(f.attendees !== false || editing || event.attendees.length) ? <Line glyph={<UserGlyph />}><Guests attendees={event.attendees} editing={editing} value={cur.guests} onChange={s => setCur({ ...cur, guests: s })} /></Line> : null}
         {event.description && f.description !== false ? <Line glyph={<NotesGlyph />}><LongText md={event.description} /></Line> : null}
-        {event.myResponse && !editing ? (
+        {myResponse && !editing ? (
           <div style={{ ...row, fontSize: 13, paddingTop: 4, borderTop: `1px solid ${v("border")}` }}>
             <span style={muted}>Going?</span>
-            {(["yes", "no", "maybe"] as const).map(a => { const mine = (a === "yes" && event.myResponse === "accepted") || (a === "no" && event.myResponse === "declined") || (a === "maybe" && event.myResponse === "tentative"); return <Button key={a} variant={mine ? "primary" : "secondary"} size="sm" disabled={rsvping !== null} onClick={() => rsvp(a)}>{rsvping === a ? "…" : a[0].toUpperCase() + a.slice(1)}</Button>; })}
+            {(["yes", "no", "maybe"] as const).map(a => { const mine = (a === "yes" && myResponse === "accepted") || (a === "no" && myResponse === "declined") || (a === "maybe" && myResponse === "tentative"); return <Button key={a} variant={mine ? "primary" : "secondary"} size="sm" onClick={() => rsvp(a)}>{a[0].toUpperCase() + a.slice(1)}</Button>; })}
             <span style={{ flex: 1 }} />
             <span style={{ ...muted, fontSize: 12 }}>{event.calendarName}</span>
           </div>
         ) : null}
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Google Calendar…" onDiscard={() => { setCur(saved); setEditing(false); }} onSave={save} note={note} />
+      <SaveBar count={changes.length} saving={false} savingText="Saving to Google Calendar…" onDiscard={() => { setCur(saved); setEditing(false); }} onSave={save} note={writeNote(w, { saving: "Saving to Google Calendar…" }) ?? note} />
     </section>
   );
 }
@@ -499,18 +501,24 @@ function Agenda({ ctx, note }: { ctx: UiCtx; note?: string }) {
 }
 
 /* ---------- NewEventCard: Google Calendar's create dialog ---------- */
-function NewEventCard({ ctx, onBack, backLabel }: { ctx: UiCtx; onBack?: () => void; backLabel?: string }) {
+function NewEventCard({ ctx, onBack, backLabel, onCreated }: { ctx: UiCtx; onBack?: () => void; backLabel?: string; onCreated?: (event: Event) => void }) {
   const draft: Draft | undefined = ctx.details?.draft;
   const calendars: Cal[] = Array.isArray(ctx.details?.calendars) ? ctx.details.calendars : [];
+  const [created, setCreated] = useState<Event | null>(null);
+  const w = useWrite(ctx);
   const seed = useMemo(() => ({ title: draft?.title ?? "", start: draft?.start ?? "", end: draft?.end ?? "", allDay: Boolean(draft?.allDay), guests: (draft?.attendees ?? []).join(", "), location: draft?.location ?? "", meet: Boolean(draft?.meet), notes: draft?.description ?? "", calendar: calendars.find(c => c.id === draft?.calendar) ?? calendars.find(c => c.primary) ?? calendars[0] }), [draft]);
   const [s, setS] = useState(seed);
   const [sent, setSent] = useState(false);
   const touched = useRef(false);
-  useEffect(() => { if (!touched.current) setS(seed); }, [seed]);
+  useEffect(() => { if (!touched.current) setS(seed); setSent(false); setCreated(null); }, [seed]);
   if (!draft) return <Placeholder text="No draft data." />;
   const set = (patch: Partial<typeof s>) => { touched.current = true; setS(prev => ({ ...prev, ...patch })); };
   const [sd, st = "09:00"] = s.start.split(" "); const [ed, et = "09:30"] = s.end.split(" ");
-  async function create() { setSent(true); await ctx.send(createMessage({ ...s, calendarName: s.calendar?.name })); }
+  async function create() {
+    setSent(true);
+    await w.run(createMessage({ ...s, calendarName: s.calendar?.name }), { keepSaved: true, revert: () => setSent(false), onDone: (details) => { const ev = details?.event ?? details?.events?.[0]; if (ev) { setCreated(ev); onCreated?.(ev); } } });
+  }
+  if (created) return <EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: created, timeZone: ctx.details?.timeZone ?? draft.timeZone } }} event={created} note="Created" />;
   return (
     <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
@@ -530,7 +538,7 @@ function NewEventCard({ ctx, onBack, backLabel }: { ctx: UiCtx; onBack?: () => v
         {calendars.length > 1 ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={c => set({ calendar: c })} label="Calendar" lead={c => <Dot color={c?.color} />} keyOf={c => c.id} labelOf={c => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar…" : ""}</span>
+        <span style={{ ...muted, fontSize: 12, ...(w.status === "failed" ? { color: v("danger") } : {}) }}>{w.status === "failed" ? `Failed: ${w.error}` : sent ? "Saving to Google Calendar…" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !s.title.trim() || !sd} onClick={create}>{sent ? "Saving…" : "Save"}</Button>
       </div>
     </section>

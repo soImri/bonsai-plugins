@@ -13,8 +13,15 @@ export type UiCtx = {
   details: any;
   phase: string;
   sessionId: string;
-  /** Send a message as the person (the card's Save / Create / Comment commands). */
+  /** Send a message as the person (the card's Save / Create / Comment commands). The agent applies it and a fresh card is drawn. */
   send: (text: string) => Promise<void>;
+  /**
+   * Apply a card command in the background, with no chat message and no new card: the plugin's
+   * `cards.write` endpoint writes it and answers with the refreshed data. For quick actions the
+   * card shows at once (a reaction, an RSVP). Resolves `{ ok: false }` when the route is
+   * unavailable; the caller decides whether to fall back to `send`.
+   */
+  apply: (text: string) => Promise<{ ok: true; applied: string[]; details?: any } | { ok: false; error: string; unavailable?: boolean }>;
   /** Open a URL in the system browser. */
   openUrl: (url: string) => void;
 };
@@ -40,6 +47,44 @@ export const hoverable = { onMouseEnter: (e: any) => (e.currentTarget.style.back
 
 export function parse<T>(raw: string | undefined): T | null { if (!raw) return null; try { return JSON.parse(raw) as T; } catch { return null; } }
 export const dayShort = (s?: string) => (s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
+
+/* ---------- writes: the card shows the change at once; the plugin writes it in the background; only a failure undoes it ---------- */
+export type WriteStatus = { status: "idle" | "saving" | "saved" | "failed"; error?: string; applied?: string[] };
+/**
+ * Run a card command through the background route. The caller applies the change to its own
+ * state before calling (optimistic) and passes `revert` for a failure. When the route is not
+ * available in this host the command goes to the chat as before, and a fresh card follows.
+ * `onDone` receives the refreshed data the write came back with (a created record's id, the
+ * saved event) for cards that want to show it.
+ */
+export function useWrite(ctx: UiCtx) {
+  const [state, setState] = useState<WriteStatus>({ status: "idle" });
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const run = async (message: string, opts?: { revert?: () => void; onDone?: (details: any, applied: string[]) => void; keepSaved?: boolean }): Promise<boolean> => {
+    setState({ status: "saving" });
+    const r = await ctx.apply(message);
+    if (r.ok) {
+      setState({ status: "saved", applied: r.applied });
+      opts?.onDone?.(r.details, r.applied);
+      if (!opts?.keepSaved) { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => setState(s => (s.status === "saved" ? { status: "idle" } : s)), 4000); }
+      return true;
+    }
+    if (r.unavailable) { await ctx.send(message); setState({ status: "idle" }); return true; }
+    opts?.revert?.();
+    setState({ status: "failed", error: r.error });
+    return false;
+  };
+  const reset = () => setState({ status: "idle" });
+  return { ...state, run, reset };
+}
+/** The one-line status a write leaves behind: "Saving…", "Saved", or the failure. */
+export function writeNote(w: WriteStatus, labels?: { saving?: string; saved?: string }): string | undefined {
+  if (w.status === "saving") return labels?.saving ?? "Saving…";
+  if (w.status === "saved") return labels?.saved ?? (w.applied?.length ? `Saved · ${w.applied.join(" · ")}` : "Saved");
+  if (w.status === "failed") return `Failed: ${w.error ?? "unknown error"}`;
+  return undefined;
+}
 
 /* ---------- follow-ups: additive secondary actions. `picked(id)` is true only when this ask picked it; the screen's own controls never depend on it ---------- */
 export function useFollowUps(offered: string[] | undefined) {
@@ -127,7 +172,7 @@ export function Picker<T>({ items, value, onPick, label, lead, keyOf, labelOf, e
 
 /* ---------- SaveBar: edits batch behind Save, never a write per click ---------- */
 export function SaveBar({ count, saving, onDiscard, onSave, note, savingText, saveText }: { count: number; saving: boolean; onDiscard: () => void; onSave: () => void; note?: string; savingText?: string; saveText?: string }) {
-  if (count === 0 && !saving) return note ? <div style={{ ...footer, ...muted, fontSize: 12 }}>{note}</div> : null;
+  if (count === 0 && !saving) return note ? <div style={{ ...footer, ...muted, fontSize: 12, ...(note.startsWith("Failed") ? { color: v("danger") } : {}) }}>{note}</div> : null;
   return (
     <div style={footer}>
       <span style={{ ...muted, fontSize: 12 }}>{saving ? (savingText ?? "Saving…") : `${count} ${count === 1 ? "change" : "changes"}`}</span>

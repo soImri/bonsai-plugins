@@ -35,6 +35,19 @@ function CardRenderer({ kind, call, phase, rawArgs, rawResult, sessionId }: Rend
   const ctx: UiCtx = {
     details, phase, sessionId,
     send: async (text) => { await actions.sendMessage(text); },
+    apply: async (text) => {
+      const invoke = (kayApi as any)?.invokeExtensionEndpoint;
+      if (typeof invoke !== "function") return { ok: false, error: "No background route in this host.", unavailable: true };
+      try {
+        const r = (await invoke.call(kayApi, "cards.write", { message: text, connector: details.connector })) as any;
+        if (r && typeof r === "object" && r.ok === true) return { ok: true, applied: Array.isArray(r.applied) ? r.applied : [], details: r.details };
+        return { ok: false, error: String(r?.error ?? "The background write failed."), unavailable: false };
+      } catch (err) {
+        const msg = (err as Error)?.message ?? String(err);
+        // An unregistered or refused endpoint means the route is not there for this host or build; a write error means it is.
+        return { ok: false, error: msg, unavailable: /not registered|unknown endpoint|not allowed|denied|no such|unavailable/i.test(msg) };
+      }
+    },
     openUrl: (url) => { void kayApi.openExternalUrl(url); },
   };
   const C = ui.component;

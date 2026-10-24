@@ -25,6 +25,42 @@ function parse(raw) {
   }
 }
 var dayShort = (s) => s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+function useWrite(ctx) {
+  const [state, setState] = useState({ status: "idle" });
+  const timer = useRef(null);
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+  const run = async (message, opts) => {
+    setState({ status: "saving" });
+    const r = await ctx.apply(message);
+    if (r.ok) {
+      setState({ status: "saved", applied: r.applied });
+      opts?.onDone?.(r.details, r.applied);
+      if (!opts?.keepSaved) {
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => setState((s) => s.status === "saved" ? { status: "idle" } : s), 4e3);
+      }
+      return true;
+    }
+    if (r.unavailable) {
+      await ctx.send(message);
+      setState({ status: "idle" });
+      return true;
+    }
+    opts?.revert?.();
+    setState({ status: "failed", error: r.error });
+    return false;
+  };
+  const reset = () => setState({ status: "idle" });
+  return { ...state, run, reset };
+}
+function writeNote(w, labels) {
+  if (w.status === "saving") return labels?.saving ?? "Saving\u2026";
+  if (w.status === "saved") return labels?.saved ?? (w.applied?.length ? `Saved \xB7 ${w.applied.join(" \xB7 ")}` : "Saved");
+  if (w.status === "failed") return `Failed: ${w.error ?? "unknown error"}`;
+  return void 0;
+}
 function useFollowUps(offered) {
   const set = new Set(offered ?? []);
   return { picked: (id) => set.has(id) };
@@ -123,7 +159,7 @@ function Picker({ items, value, onPick, label, lead, keyOf, labelOf, emphasis, m
     </div>;
 }
 function SaveBar({ count, saving, onDiscard, onSave, note, savingText, saveText }) {
-  if (count === 0 && !saving) return note ? <div style={{ ...footer, ...muted, fontSize: 12 }}>{note}</div> : null;
+  if (count === 0 && !saving) return note ? <div style={{ ...footer, ...muted, fontSize: 12, ...note.startsWith("Failed") ? { color: v("danger") } : {} }}>{note}</div> : null;
   return <div style={footer}>
       <span style={{ ...muted, fontSize: 12 }}>{saving ? savingText ?? "Saving\u2026" : `${count} ${count === 1 ? "change" : "changes"}`}</span>
       <span style={{ display: "inline-flex", gap: 8 }}>
@@ -203,13 +239,14 @@ function PropertyPills({ value, options, onChange, fields }) {
       {show("labels") ? <Picker items={options?.labels ?? value.labels} value={value.labels} multi onPick={(l) => onChange({ ...value, labels: value.labels.includes(l) ? value.labels.filter((x) => x !== l) : [...value.labels, l] })} label="Labels" lead={() => <LabelGlyph />} keyOf={(l) => l} labelOf={(l) => l} /> : null}
     </div>;
 }
-function CommentComposer({ identifier, draft, send, startOpen }) {
+function CommentComposer({ identifier, draft, ctx, startOpen }) {
   const [text, setText] = useState2(draft ?? "");
   const [open, setOpen] = useState2(Boolean(draft) || Boolean(startOpen));
   useEffect2(() => {
     if (startOpen) setOpen(true);
   }, [startOpen]);
-  const [posting, setPosting] = useState2(false);
+  const [posted, setPosted] = useState2([]);
+  const w = useWrite(ctx);
   useEffect2(() => {
     if (draft) {
       setText(draft);
@@ -217,22 +254,29 @@ function CommentComposer({ identifier, draft, send, startOpen }) {
     }
   }, [draft]);
   async function post() {
-    setPosting(true);
-    await send(commentMessage(identifier, text.trim()));
-    setPosting(false);
+    const body = text.trim();
+    setPosted((p) => [...p, body]);
     setText("");
     setOpen(false);
+    await w.run(commentMessage(identifier, body), { revert: () => {
+      setPosted((p) => p.filter((x) => x !== body));
+      setText(body);
+      setOpen(true);
+    } });
   }
-  if (!open) return <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button>;
-  return <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
-      <textarea autoFocus style={{ ...bare, lineHeight: "22px" }} rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Leave a comment…" aria-label="Comment" disabled={posting} />
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button variant="secondary" size="sm" disabled={posting} onClick={() => {
+  return <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {posted.map((p, i) => <div key={i} style={{ display: "flex", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}`, fontSize: 13 }}><UserGlyph /><span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{p}</span><span style={{ ...muted, fontSize: 11 }}>{w.status === "saving" && i === posted.length - 1 ? "posting\u2026" : "you"}</span></div>)}
+      {w.status === "failed" ? <div style={{ fontSize: 12, color: v("danger") }}>Comment failed: {w.error}</div> : null}
+      {!open ? <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button> : <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
+          <textarea autoFocus style={{ ...bare, lineHeight: "22px" }} rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Leave a comment…" aria-label="Comment" />
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="secondary" size="sm" onClick={() => {
     setOpen(false);
     setText("");
   }}>Cancel</Button>
-        <Button variant="primary" size="sm" disabled={posting || !text.trim()} onClick={post}>{posting ? "Posting\u2026" : "Comment"}</Button>
-      </div>
+            <Button variant="primary" size="sm" disabled={!text.trim()} onClick={post}>Comment</Button>
+          </div>
+        </div>}
     </div>;
 }
 function followUpsOf(d, issue) {
@@ -245,7 +289,8 @@ function IssueCard({ ctx, note }) {
   const initial = useMemo(() => issue ? propsOf(issue, states) : { priority: 0, labels: [] }, [issue]);
   const [saved, setSaved] = useState2(initial);
   const [cur, setCur] = useState2(initial);
-  const [saving, setSaving] = useState2(false);
+  const w = useWrite(ctx);
+  const saving = w.status === "saving";
   const dirty = useRef2(false);
   useEffect2(() => {
     if (!dirty.current) {
@@ -259,11 +304,12 @@ function IssueCard({ ctx, note }) {
   const changes = diff(saved, cur);
   dirty.current = changes.length > 0;
   async function save() {
-    setSaving(true);
-    const next = cur;
-    await ctx.send(saveLine(issue.identifier, changes));
+    const prev = saved, next = cur;
     setSaved(next);
-    setSaving(false);
+    await w.run(saveLine(issue.identifier, changes), { revert: () => {
+      setSaved(prev);
+      setCur(next);
+    } });
   }
   return <section style={card}>
       <div style={pad}>
@@ -275,12 +321,12 @@ function IssueCard({ ctx, note }) {
         {issue.description ? <LongText md={issue.description} /> : null}
         <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}><PropertyPills value={cur} options={issue.options} onChange={setCur} /></div>
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {dayShort(issue.createdAt)}{issue.completedAt ? ` \xB7 Done ${dayShort(issue.completedAt)}` : ""}</div> : null}
-        <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} startOpen={fu.picked("comment")} />
+        <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} ctx={ctx} startOpen={fu.picked("comment")} />
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note} />
+      <SaveBar count={changes.length} saving={false} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={writeNote(w, { saving: "Saving to Linear\u2026" }) ?? note} />
     </section>;
 }
-function NewIssueCard({ ctx }) {
+function NewIssueCard({ ctx, onCreated }) {
   const draft = ctx.details?.draft;
   const states = draft?.options?.states?.length ? draft.options.states : DEFAULT_STATES;
   const seed = useMemo(() => ({ title: draft?.title ?? "", desc: draft?.description ?? "", state: states.find((s) => s.name === draft?.state) ?? states[1], priority: draft?.priority ?? 0, assignee: draft?.assignee, project: draft?.project, labels: draft?.labels ?? [] }), [draft]);
@@ -288,19 +334,30 @@ function NewIssueCard({ ctx }) {
   const [desc, setDesc] = useState2(seed.desc);
   const [props, setProps] = useState2(seed);
   const [sent, setSent] = useState2(false);
+  const [created, setCreated] = useState2(null);
+  const w = useWrite(ctx);
   const touched = useRef2(false);
   useEffect2(() => {
     if (!touched.current) {
       setTitle(seed.title);
       setDesc(seed.desc);
       setProps(seed);
+      setSent(false);
+      setCreated(null);
     }
   }, [seed]);
   if (!draft?.team) return <Placeholder text="No draft data." />;
   async function create() {
     setSent(true);
-    await ctx.send(createMessage(draft.team, title.trim(), props, desc));
+    await w.run(createMessage(draft.team, title.trim(), props, desc), { keepSaved: true, revert: () => setSent(false), onDone: (details) => {
+      const made = details?.issues?.[0] ?? details?.issue;
+      if (made) {
+        setCreated({ ...made, options: made.options ?? draft.options });
+        onCreated?.(made);
+      }
+    } });
   }
+  if (created) return <IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: created } }} note={`Created ${created.identifier}`} />;
   return <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
         <TeamChip k={draft.team} />
@@ -318,7 +375,7 @@ function NewIssueCard({ ctx }) {
   }} /></div>
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear\u2026" : ""}</span>
+        <span style={{ ...muted, fontSize: 12, ...w.status === "failed" ? { color: v("danger") } : {} }}>{w.status === "failed" ? `Failed: ${w.error}` : sent ? "Creating in Linear\u2026" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !title.trim()} onClick={create}>{sent ? "Creating\u2026" : "Create issue"}</Button>
       </div>
     </section>;
@@ -339,10 +396,10 @@ var SCOPE_LABEL = { open: "Open", active: "In progress", done: "Done", all: "All
 var Tab = ({ on, children, onClick }) => <button type="button" onClick={onClick} style={{ ...bare, width: "auto", padding: "3px 8px", borderRadius: 6, fontSize: 12, fontWeight: on ? 600 : 400, background: on ? v("bg-subtle") : "transparent", color: on ? v("text-primary") : v("text-secondary"), cursor: "pointer" }}>{children}</button>;
 function ComposedView({ ctx, note }) {
   const d = ctx.details ?? {};
-  const all = Array.isArray(d.allIssues) && d.allIssues.length ? d.allIssues : Array.isArray(d.issues) ? d.issues : [];
+  const base = Array.isArray(d.allIssues) && d.allIssues.length ? d.allIssues : Array.isArray(d.issues) ? d.issues : [];
   const options = d.options;
   const jevComp = useMemo(() => {
-    const n = (d.issues ?? all).length;
+    const n = (d.issues ?? base).length;
     const fb = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", scope: "open", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" };
     const c = d.composition;
     return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...c.fields ?? {} } } : fb;
@@ -361,17 +418,21 @@ function ComposedView({ ctx, note }) {
     setCreating(false);
   }, [jevComp]);
   const states = options?.states?.length ? options.states : DEFAULT_STATES;
-  const seed = useMemo(() => Object.fromEntries(all.map((i) => [i.identifier, propsOf(i, states)])), [d]);
+  const seed = useMemo(() => Object.fromEntries(base.map((i) => [i.identifier, propsOf(i, states)])), [d]);
   const [saved, setSaved] = useState2(seed);
   const [cur, setCur] = useState2(seed);
-  const [saving, setSaving] = useState2(false);
+  const [added, setAdded] = useState2([]);
+  const w = useWrite(ctx);
+  const saving = w.status === "saving";
   const dirty = useRef2(false);
   useEffect2(() => {
     if (!dirty.current) {
       setSaved(seed);
       setCur(seed);
     }
+    setAdded([]);
   }, [seed]);
+  const all = [...base, ...added];
   const stateOf = (i) => cur[i.identifier]?.state ?? i.state;
   const issues = all.filter((i) => SCOPE_TYPES[scope] === null || SCOPE_TYPES[scope].includes(stateOf(i).type ?? ""));
   const applied = Array.isArray(d.applied) ? d.applied : void 0;
@@ -386,11 +447,12 @@ function ComposedView({ ctx, note }) {
   const changes = changedIds.map((id) => saveLine(id, diff(saved[id], cur[id])));
   dirty.current = changes.length > 0;
   async function save() {
-    setSaving(true);
-    const next = cur;
-    await ctx.send(changes.join("\n"));
+    const prev = saved, next = cur;
     setSaved(next);
-    setSaving(false);
+    await w.run(changes.join("\n"), { revert: () => {
+      setSaved(prev);
+      setCur(next);
+    } });
   }
   const open = (id) => setOpenId((o) => o === id ? null : id);
   const team = d.team ?? all[0]?.identifier.split("-")[0] ?? "";
@@ -426,7 +488,12 @@ function ComposedView({ ctx, note }) {
         {(Array.isArray(comp.scopes) && comp.scopes.length ? comp.scopes : ["open", "active", "done", "all"]).map((sc) => <Tab key={sc} on={scope === sc} onClick={() => setScope(sc)}>{SCOPE_LABEL[sc]}</Tab>)}
       </span>
     </div>;
-  const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options } } }} /> : null;
+  const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options } } }} onCreated={(made) => {
+    setAdded((a) => [...a, made]);
+    setCur((c) => ({ ...c, [made.identifier]: propsOf(made, states) }));
+    setSaved((c) => ({ ...c, [made.identifier]: propsOf(made, states) }));
+    setCreating(false);
+  }} /> : null;
   const emptyNote = !issues.length ? <div style={{ ...muted, padding: "8px 8px 2px" }}>No {SCOPE_LABEL[scope].toLowerCase()} issues.</div> : null;
   return <section style={card}>
       <div style={{ ...pad, gap: 8 }}>
@@ -447,7 +514,7 @@ function ComposedView({ ctx, note }) {
             </div>)}
         </div>
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} />
+      <SaveBar count={changes.length} saving={false} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={writeNote(w, { saving: "Saving to Linear\u2026" })} />
     </section>;
 }
 function LinearUi({ ctx, note }) {
@@ -517,8 +584,9 @@ function EventCard({ ctx, event: given, note }) {
   const [saved, setSaved] = useState3(seed);
   const [cur, setCur] = useState3(seed);
   const [editing, setEditing] = useState3(false);
-  const [saving, setSaving] = useState3(false);
-  const [rsvping, setRsvping] = useState3(null);
+  const w = useWrite(ctx);
+  const saving = w.status === "saving";
+  const [myResponse, setMyResponse] = useState3(event?.myResponse);
   const dirty = useRef3(false);
   useEffect3(() => {
     if (!dirty.current) {
@@ -526,6 +594,7 @@ function EventCard({ ctx, event: given, note }) {
       setCur(seed);
       setEditing(false);
     }
+    setMyResponse(event?.myResponse);
   }, [seed]);
   if (!event?.key) return <Placeholder text="No event data." />;
   const changes = [];
@@ -536,17 +605,19 @@ function EventCard({ ctx, event: given, note }) {
   if (cur.guests !== saved.guests) changes.push(`guests \u2192 ${cur.guests.trim() || "none"}`);
   dirty.current = changes.length > 0 || editing;
   async function save() {
-    setSaving(true);
-    const next = cur;
-    await ctx.send(saveLine2(event.key, changes));
+    const prev = saved, next = cur;
     setSaved(next);
-    setSaving(false);
     setEditing(false);
+    await w.run(saveLine2(event.key, changes), { revert: () => {
+      setSaved(prev);
+      setCur(next);
+      setEditing(true);
+    } });
   }
   async function rsvp(answer) {
-    setRsvping(answer);
-    await ctx.send(`RSVP ${event.key}: ${answer}`);
-    setRsvping(null);
+    const prev = myResponse;
+    setMyResponse(answer === "yes" ? "accepted" : answer === "no" ? "declined" : "tentative");
+    await w.run(`RSVP ${event.key}: ${answer}`, { revert: () => setMyResponse(prev) });
   }
   const [sd, st] = cur.start.split(" ");
   const [ed, et] = cur.end.split(" ");
@@ -572,20 +643,20 @@ function EventCard({ ctx, event: given, note }) {
         {event.meet ? <Line glyph={<VideoGlyph />}><Button variant="primary" size="sm" onClick={() => ctx.openUrl(event.meet)}>Join with Google Meet</Button></Line> : null}
         {f.attendees !== false || editing || event.attendees.length ? <Line glyph={<UserGlyph />}><Guests attendees={event.attendees} editing={editing} value={cur.guests} onChange={(s) => setCur({ ...cur, guests: s })} /></Line> : null}
         {event.description && f.description !== false ? <Line glyph={<NotesGlyph />}><LongText md={event.description} /></Line> : null}
-        {event.myResponse && !editing ? <div style={{ ...row, fontSize: 13, paddingTop: 4, borderTop: `1px solid ${v("border")}` }}>
+        {myResponse && !editing ? <div style={{ ...row, fontSize: 13, paddingTop: 4, borderTop: `1px solid ${v("border")}` }}>
             <span style={muted}>Going?</span>
             {["yes", "no", "maybe"].map((a) => {
-    const mine = a === "yes" && event.myResponse === "accepted" || a === "no" && event.myResponse === "declined" || a === "maybe" && event.myResponse === "tentative";
-    return <Button key={a} variant={mine ? "primary" : "secondary"} size="sm" disabled={rsvping !== null} onClick={() => rsvp(a)}>{rsvping === a ? "\u2026" : a[0].toUpperCase() + a.slice(1)}</Button>;
+    const mine = a === "yes" && myResponse === "accepted" || a === "no" && myResponse === "declined" || a === "maybe" && myResponse === "tentative";
+    return <Button key={a} variant={mine ? "primary" : "secondary"} size="sm" onClick={() => rsvp(a)}>{a[0].toUpperCase() + a.slice(1)}</Button>;
   })}
             <span style={{ flex: 1 }} />
             <span style={{ ...muted, fontSize: 12 }}>{event.calendarName}</span>
           </div> : null}
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Google Calendar…" onDiscard={() => {
+      <SaveBar count={changes.length} saving={false} savingText="Saving to Google Calendar…" onDiscard={() => {
     setCur(saved);
     setEditing(false);
-  }} onSave={save} note={note} />
+  }} onSave={save} note={writeNote(w, { saving: "Saving to Google Calendar\u2026" }) ?? note} />
     </section>;
 }
 var addDays = (ymd, n) => {
@@ -1025,15 +1096,19 @@ function Agenda({ ctx, note }) {
       </div>
     </section>;
 }
-function NewEventCard({ ctx, onBack, backLabel }) {
+function NewEventCard({ ctx, onBack, backLabel, onCreated }) {
   const draft = ctx.details?.draft;
   const calendars = Array.isArray(ctx.details?.calendars) ? ctx.details.calendars : [];
+  const [created, setCreated] = useState3(null);
+  const w = useWrite(ctx);
   const seed = useMemo2(() => ({ title: draft?.title ?? "", start: draft?.start ?? "", end: draft?.end ?? "", allDay: Boolean(draft?.allDay), guests: (draft?.attendees ?? []).join(", "), location: draft?.location ?? "", meet: Boolean(draft?.meet), notes: draft?.description ?? "", calendar: calendars.find((c) => c.id === draft?.calendar) ?? calendars.find((c) => c.primary) ?? calendars[0] }), [draft]);
   const [s, setS] = useState3(seed);
   const [sent, setSent] = useState3(false);
   const touched = useRef3(false);
   useEffect3(() => {
     if (!touched.current) setS(seed);
+    setSent(false);
+    setCreated(null);
   }, [seed]);
   if (!draft) return <Placeholder text="No draft data." />;
   const set = (patch) => {
@@ -1044,8 +1119,15 @@ function NewEventCard({ ctx, onBack, backLabel }) {
   const [ed, et = "09:30"] = s.end.split(" ");
   async function create() {
     setSent(true);
-    await ctx.send(createMessage2({ ...s, calendarName: s.calendar?.name }));
+    await w.run(createMessage2({ ...s, calendarName: s.calendar?.name }), { keepSaved: true, revert: () => setSent(false), onDone: (details) => {
+      const ev = details?.event ?? details?.events?.[0];
+      if (ev) {
+        setCreated(ev);
+        onCreated?.(ev);
+      }
+    } });
   }
+  if (created) return <EventCard ctx={{ ...ctx, details: { ...ctx.details, kind: "event", event: created, timeZone: ctx.details?.timeZone ?? draft.timeZone } }} event={created} note="Created" />;
   return <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
         {onBack ? <button type="button" onClick={onBack} style={{ ...bare, width: "auto", fontSize: 12, color: v("text-secondary"), cursor: "pointer", textAlign: "left" }}>{backLabel ?? "\u2039 Find a time"}</button> : null}
@@ -1064,7 +1146,7 @@ function NewEventCard({ ctx, onBack, backLabel }) {
         {calendars.length > 1 ? <Line glyph={<Dot color={s.calendar?.color} />}><Picker items={calendars} value={s.calendar} onPick={(c) => set({ calendar: c })} label="Calendar" lead={(c) => <Dot color={c?.color} />} keyOf={(c) => c.id} labelOf={(c) => c.name} /></Line> : s.calendar ? <Line glyph={<Dot color={s.calendar.color} />}><span style={muted}>{s.calendar.name}</span></Line> : null}
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Saving to Google Calendar\u2026" : ""}</span>
+        <span style={{ ...muted, fontSize: 12, ...w.status === "failed" ? { color: v("danger") } : {} }}>{w.status === "failed" ? `Failed: ${w.error}` : sent ? "Saving to Google Calendar\u2026" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !s.title.trim() || !sd} onClick={create}>{sent ? "Saving\u2026" : "Save"}</Button>
       </div>
     </section>;
@@ -1144,12 +1226,35 @@ function AttachmentCard({ a, ctx }) {
 function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }) {
   const [hover, setHover] = useState4(false);
   const [open, setOpen] = useState4(false);
+  const replyPost = usePost(ctx);
   const conv = convOf(m.channel);
   const tgt = conv ? target(conv) : `#${m.channelName}`;
+  const [reactions, setReactions] = useState4(m.reactions);
+  const [reactErr, setReactErr] = useState4(null);
+  useEffect4(() => {
+    setReactions(m.reactions);
+    setReactErr(null);
+  }, [m]);
   const sendReact = (name) => {
-    void ctx.send(`React to ${tgt} ${m.ts}: :${name}:`);
+    const before = reactions;
+    const cur = before.find((r) => r.name === name);
+    const removing = Boolean(cur?.mine);
+    const next = removing ? before.map((r) => r.name === name ? { ...r, count: r.count - 1, mine: false } : r).filter((r) => r.count > 0) : cur ? before.map((r) => r.name === name ? { ...r, count: r.count + 1, mine: true } : r) : [...before, { name, count: 1, mine: true }];
+    setReactions(next);
+    setReactErr(null);
+    const msg = `${removing ? "Unreact to" : "React to"} ${tgt} ${m.ts}: :${name}:`;
+    void ctx.apply(msg).then((r) => {
+      if (r.ok) return;
+      if (r.unavailable) {
+        void ctx.send(msg);
+        return;
+      }
+      setReactions(before);
+      setReactErr(r.error);
+    });
   };
-  const count = Math.max(m.replyCount, replies?.length ?? 0);
+  const allReplies = [...replies ?? [], ...replyPost.local];
+  const count = Math.max(m.replyCount, allReplies.length);
   return <div>
       <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ display: "flex", gap: 10, padding: compact ? "4px 8px" : "6px 8px", borderRadius: 8, position: "relative", background: hover ? v("interactive-hover") : m.mentionsMe ? "color-mix(in srgb, var(--kay-color-warning) 10%, transparent)" : "transparent" }}>
         <Avatar m={m} />
@@ -1164,8 +1269,9 @@ function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }) {
           {m.text ? <Rich text={m.text} /> : null}
           {m.attachments?.map((a, i) => <AttachmentCard key={i} a={a} ctx={ctx} />)}
           {m.files?.length ? <div style={{ ...muted, fontSize: 12 }}>📎 {m.files.map((f) => f.title ?? f.name).join(", ")}</div> : null}
-          {fields.reactions && m.reactions.length || fields.threads && count ? <div style={{ ...row, marginTop: 4 }}>
-              {fields.reactions ? m.reactions.map((r) => <button key={r.name} type="button" onClick={() => sendReact(r.name)} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: "pointer" }}>{emoji(r.name)} {r.count}</button>) : null}
+          {reactErr ? <div style={{ fontSize: 11, color: v("danger"), marginTop: 2 }}>Reaction failed: {reactErr}</div> : null}
+          {fields.reactions && reactions.length || fields.threads && count ? <div style={{ ...row, marginTop: 4 }}>
+              {fields.reactions ? reactions.map((r) => <button key={r.name} type="button" onClick={() => sendReact(r.name)} title={`:${r.name}:`} style={{ ...bare, width: "auto", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 12, fontSize: 12, border: `1px solid ${r.mine ? v("accent") : v("border")}`, background: r.mine ? "color-mix(in srgb, var(--kay-color-accent) 12%, transparent)" : v("bg-subtle"), cursor: "pointer" }}>{emoji(r.name)} {r.count}</button>) : null}
               {fields.threads && count ? <button type="button" onClick={() => setOpen((o) => !o)} style={{ ...bare, width: "auto", fontSize: 12, color: v("accent"), fontWeight: 600, cursor: "pointer" }}>{open ? "Hide thread" : `${count} ${count === 1 ? "reply" : "replies"} \u203A`}</button> : null}
             </div> : null}
         </div>
@@ -1176,11 +1282,12 @@ function MessageRow({ m, ctx, fields, showChannel, replies, compact, convOf }) {
           </div> : null}
       </div>
       {open ? <div style={{ margin: "0 0 8px 44px", borderLeft: `2px solid ${v("border")}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 2 }}>
-          {(replies ?? []).map((r) => <MessageRow key={r.ts} m={r} ctx={ctx} fields={{ reactions: fields.reactions, threads: false }} compact convOf={convOf} />)}
-          {count > (replies?.length ?? 0) ? <div style={{ ...muted, fontSize: 12, padding: "2px 8px" }}>{count - (replies?.length ?? 0)} older {count - (replies?.length ?? 0) === 1 ? "reply is" : "replies are"} in Slack{m.permalink ? "" : ""}.</div> : null}
+          {allReplies.map((r) => <MessageRow key={r.ts} m={r} ctx={ctx} fields={{ reactions: fields.reactions, threads: false }} compact convOf={convOf} />)}
+          {count > allReplies.length ? <div style={{ ...muted, fontSize: 12, padding: "2px 8px" }}>{count - allReplies.length} older {count - allReplies.length === 1 ? "reply is" : "replies are"} in Slack.</div> : null}
+          {replyPost.failed ? <div style={{ fontSize: 12, color: v("danger"), padding: "0 8px" }}>Reply failed: {replyPost.failed}</div> : null}
           <ComposeBox placeholder="Reply…" sendLabel="Reply" onSend={async (text) => {
-    await ctx.send(`Reply in ${tgt} ${m.ts}:
-${text}`);
+    await replyPost.post(`Reply in ${tgt} ${m.ts}:
+${text}`, mineNow(ctx.details, m.channel, m.channelName, text, m.ts));
   }} />
         </div> : null}
     </div>;
@@ -1220,6 +1327,35 @@ function ComposeBox({ placeholder, draft, onSend, sendLabel = "Send" }) {
       </div>
     </div>;
 }
+var localSeq = 0;
+function mineNow(d, channel, channelName, text, threadTs) {
+  const me = d?.meProfile ?? { name: "you", initials: "?" };
+  const now = /* @__PURE__ */ new Date();
+  const ts = `${Math.floor(now.getTime() / 1e3)}.local${String(localSeq++).padStart(4, "0")}`;
+  return { ref: `${channel}/${ts}`, channel, channelName, ts, ...threadTs ? { threadTs } : {}, time: now.toISOString(), userId: d?.me, user: me.name, initials: me.initials, ...me.avatar ? { avatar: me.avatar } : {}, text, reactions: [], replyCount: 0, mentionsMe: false };
+}
+function usePost(ctx) {
+  const w = useWrite(ctx);
+  const [local, setLocal] = useState4([]);
+  const [failed, setFailed] = useState4(null);
+  useEffect4(() => {
+    setLocal([]);
+    setFailed(null);
+  }, [ctx.details]);
+  const [failedRow, setFailedRow] = useState4(null);
+  const post = async (message, row2) => {
+    setLocal((l) => [...l, row2]);
+    setFailed(null);
+    setFailedRow(null);
+    const ok = await w.run(message, { revert: () => {
+      setLocal((l) => l.filter((x) => x.ts !== row2.ts));
+      setFailedRow(row2);
+    } });
+    if (!ok) setFailed("could not send");
+  };
+  const failedIn = (channel) => w.status === "failed" && failedRow?.channel === channel ? w.error ?? failed ?? "could not send" : null;
+  return { local, failed: w.status === "failed" ? w.error ?? failed ?? "could not send" : null, failedIn, post, status: w.status };
+}
 function splitThreads(all) {
   const repliesOf = /* @__PURE__ */ new Map();
   const parents = [];
@@ -1239,8 +1375,9 @@ function ChannelView({ ctx, note }) {
   const ch = d.channel;
   const convs = Array.isArray(d.conversations) ? d.conversations : [];
   const convOf = (id) => convs.find((c) => c.id === id);
-  const all = Array.isArray(d.messages) ? d.messages : [];
-  const comp = d.composition ?? { view: "channel", range: "2_weeks", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
+  const channelPost = usePost(ctx);
+  const all = [...Array.isArray(d.messages) ? d.messages : [], ...channelPost.local];
+  const comp = d.composition ?? { view: "channel", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" };
   const isThread = d.view === "thread" && d.threadTs;
   if (!ch) return <Placeholder text="No conversation data." />;
   const { parents, repliesOf } = isThread ? { parents: all, repliesOf: /* @__PURE__ */ new Map() } : splitThreads(all);
@@ -1265,23 +1402,25 @@ function ChannelView({ ctx, note }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}><span style={{ flex: 1, height: 1, background: v("border") }} /><span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 12, border: `1px solid ${v("border")}` }}>{dayLabel(items[0].time)}</span><span style={{ flex: 1, height: 1, background: v("border") }} /></div>
             {items.map((m, i) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={isThread ? { ...comp.fields, threads: false } : comp.fields} replies={repliesOf.get(m.ts)} compact={isThread && i > 0} convOf={convOf} />)}
           </div>)}
+        {channelPost.failed ? <div style={{ fontSize: 12, color: v("danger"), padding: "0 8px" }}>Send failed: {channelPost.failed}</div> : null}
         <ComposeBox placeholder={isThread ? "Reply\u2026" : `Message ${convLabel(ch)}`} draft={d.draft} sendLabel={isThread ? "Reply" : "Send"} onSend={async (text) => {
-    await ctx.send(isThread ? `Reply in ${tgt} ${d.threadTs}:
+    await channelPost.post(isThread ? `Reply in ${tgt} ${d.threadTs}:
 ${text}` : `Post in ${tgt}:
-${text}`);
+${text}`, mineNow(d, ch.id, ch.name, text, isThread ? d.threadTs : void 0));
   }} />
       </div>
     </section>;
 }
 function ActivityView({ ctx, note }) {
   const d = ctx.details ?? {};
-  const all = Array.isArray(d.messages) ? d.messages : [];
   const convs = Array.isArray(d.conversations) ? d.conversations : [];
   const me = d.me ?? "";
   const convOf = (id) => convs.find((c) => c.id === id);
   const comp = d.composition ?? { view: "activity", focus: "needs_me", fields: { reactions: true, threads: true }, by: "fallback" };
   const fu = useFollowUps(comp.followUps);
   const [posting, setPosting] = useState4(false);
+  const dmPost = usePost(ctx);
+  const all = [...Array.isArray(d.messages) ? d.messages : [], ...dmPost.local];
   useEffect4(() => {
     setPosting(false);
   }, [d]);
@@ -1355,9 +1494,9 @@ function ActivityView({ ctx, note }) {
                   <div style={{ ...muted, fontSize: 12, fontWeight: 600, padding: "0 8px 2px", display: "flex", alignItems: "center", gap: 6 }}>{sec.id === "dms" && g.conv ? <Face src={g.conv.avatar} initials={initialsOf(g.conv.name)} seed={g.conv.id} size={18} /> : null}{g.label}{g.threadTs && head && !head.threadTs ? <span style={{ fontWeight: 400 }}> · thread</span> : null}</div>
                   {g.parent && head && head.threadTs ? <MessageRow m={g.parent} ctx={ctx} fields={{ ...comp.fields, threads: false }} compact convOf={convOf} /> : null}
                   {g.items.map((m) => <MessageRow key={m.ts} m={m} ctx={ctx} fields={comp.fields} replies={g.threadTs && !m.threadTs ? g.replies : void 0} compact convOf={convOf} />)}
-                  {sec.id === "dms" && g.conv ? <div style={{ padding: "2px 8px 4px" }}><ComposeBox placeholder={`Message ${convLabel(g.conv)}`} onSend={async (text) => {
-      await ctx.send(`Post in ${tgt}:
-${text}`);
+                  {sec.id === "dms" && g.conv ? <div style={{ padding: "2px 8px 4px" }}>{dmPost.failedIn(g.conv.id) ? <div style={{ fontSize: 12, color: v("danger"), paddingBottom: 4 }}>Send failed: {dmPost.failedIn(g.conv.id)}</div> : null}<ComposeBox placeholder={`Message ${convLabel(g.conv)}`} onSend={async (text) => {
+      await dmPost.post(`Post in ${tgt}:
+${text}`, mineNow(d, g.conv.id, g.conv.name, text));
     }} /></div> : null}
                 </div>;
   })}
@@ -1367,7 +1506,10 @@ ${text}`);
 }
 function InlineComposer({ ctx, convs, onDone }) {
   const [conv, setConv] = useState4(convs[0]);
+  const [sent, setSent] = useState4(null);
+  const w = useWrite(ctx);
   if (!convs.length) return null;
+  if (sent) return <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 8, background: v("bg-subtle"), fontSize: 13 }}><span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={muted}>{w.status === "failed" ? `Failed to send to ${sent.to}: ${w.error}` : w.status === "saving" ? `Sending to ${sent.to}\u2026` : `Sent to ${sent.to}`}</span>{w.status === "failed" ? "" : ` \xB7 ${sent.text}`}</span>{w.status === "failed" ? <Button variant="secondary" size="sm" onClick={() => setSent(null)}>Edit</Button> : null}</div>;
   return <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "6px 8px 8px", borderRadius: 8, border: `1px solid ${v("border")}`, background: v("bg-subtle") }}>
       <div style={{ ...row, fontSize: 13 }}>
         <span style={muted}>To</span>
@@ -1375,9 +1517,10 @@ function InlineComposer({ ctx, convs, onDone }) {
       </div>
       <ComposeBox placeholder={`Message ${convLabel(conv)}`} onSend={async (text) => {
     if (!conv) return;
-    await ctx.send(`Post in ${target(conv)}:
-${text}`);
-    onDone();
+    setSent({ to: convLabel(conv), text });
+    void w.run(`Post in ${target(conv)}:
+${text}`, { keepSaved: true });
+    void onDone;
   }} />
     </div>;
 }
@@ -1386,10 +1529,11 @@ function Composer({ ctx }) {
   const convs = Array.isArray(d.conversations) ? d.conversations : [];
   const seed = useMemo3(() => ({ conv: convs.find((c) => c.id === d.draft?.channel?.id) ?? convs[0], text: d.draft?.text ?? "" }), [d]);
   const [conv, setConv] = useState4(seed.conv);
-  const [sent, setSent] = useState4(false);
+  const [sent, setSent] = useState4(null);
+  const w = useWrite(ctx);
   useEffect4(() => {
     setConv(seed.conv);
-    setSent(false);
+    setSent(null);
   }, [seed]);
   if (!convs.length) return <Placeholder text="No conversations to post in." />;
   return <section style={card}>
@@ -1399,14 +1543,14 @@ function Composer({ ctx }) {
           <Picker items={convs} value={conv} onPick={(c) => setConv(c)} label="Conversation" lead={(c) => <span style={{ fontSize: 12 }}>{c?.kind === "dm" ? "@" : "#"}</span>} keyOf={(c) => c.id} labelOf={(c) => convLabel(c)} emphasis />
           {conv?.topic ? <span style={{ ...muted, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{conv.topic}</span> : null}
         </div>
-        <ComposeBox placeholder={`Message ${convLabel(conv)}`} draft={seed.text} onSend={async (text) => {
+        {sent ? <div style={{ display: "flex", gap: 10, padding: "4px 0" }}><Face src={d.meProfile?.avatar} initials={d.meProfile?.initials ?? "?"} seed={d.me ?? "me"} /><div><div style={{ fontWeight: 700, fontSize: 14 }}>{d.meProfile?.name ?? "you"} <span style={{ ...muted, fontSize: 11 }}>{fmtTime2((/* @__PURE__ */ new Date()).toISOString())}</span></div><div style={{ whiteSpace: "pre-wrap" }}>{sent}</div></div></div> : <ComposeBox placeholder={`Message ${convLabel(conv)}`} draft={seed.text} onSend={async (text) => {
     if (!conv) return;
-    setSent(true);
-    await ctx.send(`Post in ${target(conv)}:
-${text}`);
-  }} />
+    setSent(text);
+    void w.run(`Post in ${target(conv)}:
+${text}`, { keepSaved: true, revert: () => setSent(null) });
+  }} />}
       </div>
-      {sent ? <div style={{ ...footer, ...muted, fontSize: 12 }}>Sending to Slack…</div> : null}
+      {sent || w.status !== "idle" ? <div style={{ ...footer, ...muted, fontSize: 12, ...w.status === "failed" ? { color: v("danger") } : {} }}>{w.status === "failed" ? `Failed: ${w.error}` : w.status === "saving" ? `Sending to ${convLabel(conv)}\u2026` : `Sent to ${convLabel(conv)}`}</div> : null}
     </section>;
 }
 function SlackUi({ ctx, note }) {
@@ -1451,6 +1595,18 @@ function CardRenderer({ kind, call, phase, rawArgs, rawResult, sessionId }) {
     sessionId,
     send: async (text) => {
       await actions.sendMessage(text);
+    },
+    apply: async (text) => {
+      const invoke = kayApi?.invokeExtensionEndpoint;
+      if (typeof invoke !== "function") return { ok: false, error: "No background route in this host.", unavailable: true };
+      try {
+        const r = await invoke.call(kayApi, "cards.write", { message: text, connector: details.connector });
+        if (r && typeof r === "object" && r.ok === true) return { ok: true, applied: Array.isArray(r.applied) ? r.applied : [], details: r.details };
+        return { ok: false, error: String(r?.error ?? "The background write failed."), unavailable: false };
+      } catch (err) {
+        const msg = err?.message ?? String(err);
+        return { ok: false, error: msg, unavailable: /not registered|unknown endpoint|not allowed|denied|no such|unavailable/i.test(msg) };
+      }
     },
     openUrl: (url) => {
       void kayApi.openExternalUrl(url);

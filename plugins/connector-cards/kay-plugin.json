@@ -3,7 +3,7 @@
   "id": "com.imrisofer.connector-cards",
   "displayName": "Connector cards",
   "description": "Connector cards: a connected app's own UI in the chat, for any connector. One tool call per ask; the plugin reads and writes the app itself through Bonsai's sign-in, and Jev picks the connector, the view and the fields at runtime. Linear and Google Calendar, Slack today; a scaffold adds more.",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "namespace": "cards",
   "compatibility": {
     "sdk": "^0.13.0"
@@ -62,12 +62,106 @@
         "entrypoint": {
           "module": "./kay-ui.tsx"
         }
+      },
+      "app": {
+        "entrypoint": {
+          "module": "./kay-app.ts"
+        },
+        "contributes": {
+          "endpoints": [
+            {
+              "localId": "write",
+              "displayName": "Apply a card action in the background",
+              "requestSchema": {
+                "type": "object",
+                "properties": {
+                  "connector": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "payload": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": false
+              },
+              "responseSchema": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "applied": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ],
+                "additionalProperties": false
+              }
+            }
+          ]
+        }
       }
     }
   },
   "permissions": {
     "byTarget": {
       "kay.agent": {
+        "auth": [
+          {
+            "service": "linear.account",
+            "schemes": [
+              "linear.mcp-oauth"
+            ],
+            "operations": [
+              "resolve"
+            ],
+            "purposes": [
+              "Read and write Linear issues to draw and apply the Linear cards."
+            ]
+          },
+          {
+            "service": "google.account",
+            "schemes": [
+              "google.oauth"
+            ],
+            "operations": [
+              "resolve"
+            ],
+            "purposes": [
+              "Read and write Google Calendar events to draw and apply the calendar cards."
+            ]
+          },
+          {
+            "service": "slack.account",
+            "schemes": [
+              "slack.oauth"
+            ],
+            "operations": [
+              "resolve"
+            ],
+            "purposes": [
+              "Read and write Slack records to draw and apply the Slack cards."
+            ]
+          }
+        ]
+      },
+      "kay.app": {
         "auth": [
           {
             "service": "linear.account",

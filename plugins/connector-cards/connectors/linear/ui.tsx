@@ -8,7 +8,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Button, ErrorCard, GroupHeader, LongText, OpenExternal, Picker, Placeholder, ProgressBar, SaveBar, Timing, UserGlyph, bare, card, dayShort, footer, hoverable, mono, muted, pad, row, useFollowUps, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
+import { Button, ErrorCard, GroupHeader, LongText, OpenExternal, Picker, Placeholder, ProgressBar, SaveBar, Timing, UserGlyph, bare, card, dayShort, footer, hoverable, mono, muted, pad, row, useFollowUps, useWrite, writeNote, v, type ConnectorUi, type UiCtx } from "../../ui/kit.tsx";
 
 /* ---------- types (the payload shapes index.ts produces) ---------- */
 type State = { name: string; type?: string };
@@ -73,21 +73,32 @@ function PropertyPills({ value, options, onChange, fields }: { value: Props; opt
   );
 }
 
-function CommentComposer({ identifier, draft, send, startOpen }: { identifier: string; draft?: string; send: UiCtx["send"]; startOpen?: boolean }) {
+function CommentComposer({ identifier, draft, ctx, startOpen }: { identifier: string; draft?: string; ctx: UiCtx; startOpen?: boolean }) {
   const [text, setText] = useState(draft ?? "");
   const [open, setOpen] = useState(Boolean(draft) || Boolean(startOpen));
   useEffect(() => { if (startOpen) setOpen(true); }, [startOpen]);
-  const [posting, setPosting] = useState(false);
+  const [posted, setPosted] = useState<string[]>([]);
+  const w = useWrite(ctx);
   useEffect(() => { if (draft) { setText(draft); setOpen(true); } }, [draft]);
-  async function post() { setPosting(true); await send(commentMessage(identifier, text.trim())); setPosting(false); setText(""); setOpen(false); }
-  if (!open) return <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button>;
+  async function post() {
+    const body = text.trim();
+    // The comment shows under the box at once; the plugin posts it in the background.
+    setPosted(p => [...p, body]); setText(""); setOpen(false);
+    await w.run(commentMessage(identifier, body), { revert: () => { setPosted(p => p.filter(x => x !== body)); setText(body); setOpen(true); } });
+  }
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
-      <textarea autoFocus style={{ ...bare, lineHeight: "22px" }} rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="Leave a comment…" aria-label="Comment" disabled={posting} />
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <Button variant="secondary" size="sm" disabled={posting} onClick={() => { setOpen(false); setText(""); }}>Cancel</Button>
-        <Button variant="primary" size="sm" disabled={posting || !text.trim()} onClick={post}>{posting ? "Posting…" : "Comment"}</Button>
-      </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {posted.map((p, i) => <div key={i} style={{ display: "flex", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}`, fontSize: 13 }}><UserGlyph /><span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{p}</span><span style={{ ...muted, fontSize: 11 }}>{w.status === "saving" && i === posted.length - 1 ? "posting…" : "you"}</span></div>)}
+      {w.status === "failed" ? <div style={{ fontSize: 12, color: v("danger") }}>Comment failed: {w.error}</div> : null}
+      {!open ? <button type="button" onClick={() => setOpen(true)} style={{ ...bare, textAlign: "left", cursor: "text", color: v("text-placeholder"), padding: "8px 0 0" }}>Leave a comment…</button> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 6, borderTop: `1px solid ${v("border")}` }}>
+          <textarea autoFocus style={{ ...bare, lineHeight: "22px" }} rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="Leave a comment…" aria-label="Comment" />
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button variant="secondary" size="sm" onClick={() => { setOpen(false); setText(""); }}>Cancel</Button>
+            <Button variant="primary" size="sm" disabled={!text.trim()} onClick={post}>Comment</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -105,14 +116,16 @@ function IssueCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const initial = useMemo<Props>(() => (issue ? propsOf(issue, states) : { priority: 0, labels: [] }), [issue]);
   const [saved, setSaved] = useState<Props>(initial);
   const [cur, setCur] = useState<Props>(initial);
-  const [saving, setSaving] = useState(false);
+  const w = useWrite(ctx);
+  const saving = w.status === "saving";
   const dirty = useRef(false);
   useEffect(() => { if (!dirty.current) { setSaved(initial); setCur(initial); } }, [initial]);
   const offered: string[] | undefined = followUpsOf(ctx.details, issue);
   const fu = useFollowUps(offered);
   if (!issue?.title) return <Placeholder text="No issue data." />;
   const changes = diff(saved, cur); dirty.current = changes.length > 0;
-  async function save() { setSaving(true); const next = cur; await ctx.send(saveLine(issue!.identifier, changes)); setSaved(next); setSaving(false); }
+  // Save shows the new state at once; the plugin writes it in the background; a failure puts the edits back as unsaved.
+  async function save() { const prev = saved, next = cur; setSaved(next); await w.run(saveLine(issue!.identifier, changes), { revert: () => { setSaved(prev); setCur(next); } }); }
   return (
     <section style={card}>
       <div style={pad}>
@@ -124,15 +137,15 @@ function IssueCard({ ctx, note }: { ctx: UiCtx; note?: string }) {
         {issue.description ? <LongText md={issue.description} /> : null}
         <div style={{ pointerEvents: saving ? "none" : "auto", opacity: saving ? 0.7 : 1 }}><PropertyPills value={cur} options={issue.options} onChange={setCur} /></div>
         {issue.createdAt ? <div style={{ ...muted, fontSize: 12 }}>Created {dayShort(issue.createdAt)}{issue.completedAt ? ` · Done ${dayShort(issue.completedAt)}` : ""}</div> : null}
-        <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} send={ctx.send} startOpen={fu.picked("comment")} />
+        <CommentComposer identifier={issue.identifier} draft={issue.commentDraft} ctx={ctx} startOpen={fu.picked("comment")} />
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={note} />
+      <SaveBar count={changes.length} saving={false} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={writeNote(w, { saving: "Saving to Linear…" }) ?? note} />
     </section>
   );
 }
 
 /* ---------- NewIssueCard: Linear's create dialog ---------- */
-function NewIssueCard({ ctx }: { ctx: UiCtx }) {
+function NewIssueCard({ ctx, onCreated }: { ctx: UiCtx; onCreated?: (issue: Issue) => void }) {
   const draft = ctx.details?.draft as Draft | undefined;
   const states = draft?.options?.states?.length ? draft.options.states : DEFAULT_STATES;
   const seed = useMemo<Props & { title: string; desc: string }>(() => ({ title: draft?.title ?? "", desc: draft?.description ?? "", state: states.find(s => s.name === draft?.state) ?? states[1], priority: draft?.priority ?? 0, assignee: draft?.assignee, project: draft?.project, labels: draft?.labels ?? [] }), [draft]);
@@ -140,10 +153,16 @@ function NewIssueCard({ ctx }: { ctx: UiCtx }) {
   const [desc, setDesc] = useState(seed.desc);
   const [props, setProps] = useState<Props>(seed);
   const [sent, setSent] = useState(false);
+  const [created, setCreated] = useState<Issue | null>(null);
+  const w = useWrite(ctx);
   const touched = useRef(false);
-  useEffect(() => { if (!touched.current) { setTitle(seed.title); setDesc(seed.desc); setProps(seed); } }, [seed]);
+  useEffect(() => { if (!touched.current) { setTitle(seed.title); setDesc(seed.desc); setProps(seed); setSent(false); setCreated(null); } }, [seed]);
   if (!draft?.team) return <Placeholder text="No draft data." />;
-  async function create() { setSent(true); await ctx.send(createMessage(draft!.team, title.trim(), props, desc)); }
+  async function create() {
+    setSent(true);
+    await w.run(createMessage(draft!.team, title.trim(), props, desc), { keepSaved: true, revert: () => setSent(false), onDone: (details) => { const made = details?.issues?.[0] ?? details?.issue; if (made) { setCreated({ ...made, options: made.options ?? draft!.options }); onCreated?.(made); } } });
+  }
+  if (created) return <IssueCard ctx={{ ...ctx, details: { kind: "issue", issue: created } }} note={`Created ${created.identifier}`} />;
   return (
     <section style={card}>
       <div style={{ ...pad, paddingBottom: 12 }}>
@@ -153,7 +172,7 @@ function NewIssueCard({ ctx }: { ctx: UiCtx }) {
         <div style={{ pointerEvents: sent ? "none" : "auto", opacity: sent ? 0.7 : 1 }}><PropertyPills value={props} options={draft.options} onChange={p => { touched.current = true; setProps(p); }} /></div>
       </div>
       <div style={footer}>
-        <span style={{ ...muted, fontSize: 12 }}>{sent ? "Creating in Linear…" : ""}</span>
+        <span style={{ ...muted, fontSize: 12, ...(w.status === "failed" ? { color: v("danger") } : {}) }}>{w.status === "failed" ? `Failed: ${w.error}` : sent ? "Creating in Linear…" : ""}</span>
         <Button variant="primary" size="sm" disabled={sent || !title.trim()} onClick={create}>{sent ? "Creating…" : "Create issue"}</Button>
       </div>
     </section>
@@ -185,9 +204,9 @@ const Tab = ({ on, children, onClick }: { on: boolean; children: ReactNode; onCl
 
 function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const d = ctx.details ?? {};
-  const all: Issue[] = Array.isArray(d.allIssues) && d.allIssues.length ? d.allIssues : Array.isArray(d.issues) ? d.issues : [];
+  const base: Issue[] = Array.isArray(d.allIssues) && d.allIssues.length ? d.allIssues : Array.isArray(d.issues) ? d.issues : [];
   const options: Options | undefined = d.options;
-  const jevComp = useMemo<Composition>(() => { const n = (d.issues ?? all).length; const fb: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", scope: "open", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" }; const c = d.composition; return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...(c.fields ?? {}) } } : fb; }, [d]);
+  const jevComp = useMemo<Composition>(() => { const n = (d.issues ?? base).length; const fb: Composition = { view: n === 1 ? "issue" : n > 6 ? "board" : "list", groupBy: "status", sort: "priority", scope: "open", fields: { description: n === 1, labels: true, dates: n === 1, assignee: true, project: true }, by: "fallback" }; const c = d.composition; return c?.view ? { ...fb, ...c, fields: { ...fb.fields, ...(c.fields ?? {}) } } : fb; }, [d]);
   const [view, setView] = useState<Composition["view"]>(jevComp.view);
   const [scope, setScope] = useState<Scope>((jevComp.scope as Scope) ?? "open");
   const [groupBy, setGroupBy] = useState<NonNullable<Composition["groupBy"]>>(jevComp.groupBy ?? "status");
@@ -196,12 +215,15 @@ function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const fu = useFollowUps(jevComp.followUps);
   useEffect(() => { setView(jevComp.view); setScope((jevComp.scope as Scope) ?? "open"); setGroupBy(jevComp.groupBy ?? "status"); setOpenId(null); setCreating(false); }, [jevComp]);
   const states = options?.states?.length ? options.states : DEFAULT_STATES;
-  const seed = useMemo(() => Object.fromEntries(all.map(i => [i.identifier, propsOf(i, states)])) as Record<string, Props>, [d]);
+  const seed = useMemo(() => Object.fromEntries(base.map(i => [i.identifier, propsOf(i, states)])) as Record<string, Props>, [d]);
   const [saved, setSaved] = useState(seed);
   const [cur, setCur] = useState(seed);
-  const [saving, setSaving] = useState(false);
+  const [added, setAdded] = useState<Issue[]>([]);
+  const w = useWrite(ctx);
+  const saving = w.status === "saving";
   const dirty = useRef(false);
-  useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); } }, [seed]);
+  useEffect(() => { if (!dirty.current) { setSaved(seed); setCur(seed); } setAdded([]); }, [seed]);
+  const all: Issue[] = [...base, ...added];
   const stateOf = (i: Issue) => cur[i.identifier]?.state ?? i.state;
   const issues = all.filter(i => SCOPE_TYPES[scope] === null || SCOPE_TYPES[scope]!.includes(stateOf(i).type ?? ""));
   const applied: string[] | undefined = Array.isArray(d.applied) ? d.applied : undefined;
@@ -217,7 +239,7 @@ function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
   const changedIds = all.filter(i => saved[i.identifier] && cur[i.identifier] && diff(saved[i.identifier], cur[i.identifier]).length).map(i => i.identifier);
   const changes = changedIds.map(id => saveLine(id, diff(saved[id], cur[id])));
   dirty.current = changes.length > 0;
-  async function save() { setSaving(true); const next = cur; await ctx.send(changes.join("\n")); setSaved(next); setSaving(false); }
+  async function save() { const prev = saved, next = cur; setSaved(next); await w.run(changes.join("\n"), { revert: () => { setSaved(prev); setCur(next); } }); }
   const open = (id: string) => setOpenId(o => (o === id ? null : id));
   const team = d.team ?? all[0]?.identifier.split("-")[0] ?? "";
   const sorted = [...issues].sort((a, b) => comp.sort === "newest" ? (b.createdAt ?? "").localeCompare(a.createdAt ?? "") : comp.sort === "priority" ? ((a.priority || 9) - (b.priority || 9)) : 0);
@@ -253,7 +275,7 @@ function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
       </span>
     </div>
   );
-  const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options } } }} /> : null;
+  const creator = creating && options ? <NewIssueCard ctx={{ ...ctx, details: { kind: "draft", draft: { team, title: "", description: "", priority: 0, labels: [], options } } }} onCreated={made => { setAdded(a => [...a, made]); setCur(c => ({ ...c, [made.identifier]: propsOf(made, states) })); setSaved(c => ({ ...c, [made.identifier]: propsOf(made, states) })); setCreating(false); }} /> : null;
   const emptyNote = !issues.length ? <div style={{ ...muted, padding: "8px 8px 2px" }}>No {SCOPE_LABEL[scope].toLowerCase()} issues.</div> : null;
 
   return (
@@ -282,7 +304,7 @@ function ComposedView({ ctx, note }: { ctx: UiCtx; note?: string }) {
           ))}
         </div>
       </div>
-      <SaveBar count={changes.length} saving={saving} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} />
+      <SaveBar count={changes.length} saving={false} savingText="Saving to Linear…" onDiscard={() => setCur(saved)} onSave={save} note={writeNote(w, { saving: "Saving to Linear…" })} />
     </section>
   );
 }

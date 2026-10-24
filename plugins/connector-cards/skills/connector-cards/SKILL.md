@@ -20,6 +20,8 @@ After the call returns, reply with nothing. Not a summary, not what the card sho
 
 ## Messages the cards send back
 
+Most card actions no longer reach you: a reaction, a reply, a post, a Save, an RSVP or a Create is written by the plugin in the background and the card shows the result itself. You see one of the messages below only when that route is unavailable; then handle it exactly as before.
+
 Each one is exactly one `cards_apply { message }` call with the message verbatim, then nothing. Never call an MCP or URI yourself for these; the plugin parses, writes, and redraws the card from the app's truth. Bonsai may ask you to approve the write; that is expected.
 
 - Linear: `Save NEAT-10: status → In Progress; labels → A, B` (one line per issue), `Comment on NEAT-10:` + body, `Create in NEAT: <title>` + a properties line and an optional `Description:` block.

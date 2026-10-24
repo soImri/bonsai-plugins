@@ -21,6 +21,7 @@ const THREAD_REF = /\b[A-Z][A-Z0-9]{6,}\/\d{10}\.\d{6}\b/;
 const DM_REF = /(?:^|\s)@[a-z0-9][\w.'-]+/i;
 
 const channelInfo = (c: Channel) => ({ id: c.id, name: c.name, kind: c.kind, ...(c.topic ? { topic: c.topic } : {}), ...(c.members !== undefined ? { members: c.members } : {}) });
+const meProfile = (meta: Meta) => { const p = meta.people[meta.me]; return p ? { name: p.display, initials: p.initials, ...(p.avatar ? { avatar: p.avatar } : {}) } : { name: "you", initials: "?" }; };
 const conversationsFor = (meta: Meta) => meta.channels.filter((c) => c.isMember !== false).map((c) => ({ ...channelInfo(c), ...(c.kind === "dm" && c.userId && meta.people[c.userId]?.avatar ? { avatar: meta.people[c.userId].avatar } : {}) }));
 const dateAfter = (days: number) => new Date(Date.now() - Math.max(days, 0) * 864e5 - (days === 0 ? 0 : 0)).toISOString().slice(0, 10);
 
@@ -43,7 +44,7 @@ export const slack = defineConnector({
   triggers: {
     keywords: ["slack", "channel", "channels", "thread", "threads", "dm", "dms", "direct message", "mention", "mentions", "mentioned", "pinged", "post", "message", "messages", "what did i miss", "catch me up", "unread", "unreads", "reply", "react"],
     refPattern: /(?:^|\s)#[a-z][\w.'-]{2,}|\b[A-Z][A-Z0-9]{6,}\/\d{10}\.\d{6}\b/i,
-    messagePattern: /^(Post in|Reply in|React to)\s+\S+/,
+    messagePattern: /^(Post in|Reply in|React to|Unreact to)\s+\S+/,
   },
   examples: {
     view: ["what's new in #neat-build", "catch me up on Slack", "anything for me on Slack", "my DMs", "the thread about the eval set", "what did I miss"],
@@ -92,7 +93,7 @@ export const slack = defineConnector({
     const threadIds = new Set(messages.filter((m) => m.threadTs && (mine(m) || m.mentionsMe)).map((m) => m.threadTs!).concat(messages.filter((m) => !m.threadTs && m.replyCount > 0 && (mine(m) || m.mentionsMe)).map((m) => m.ts)));
     const involves = (m: Message) => (m.mentionsMe && !mine(m)) || dmIds.has(m.channel) || threadIds.has(m.threadTs ?? m.ts);
     const shown = messages.filter((m) => view !== "activity" || comp.focus === "all" || (comp.focus === "mentions" ? m.mentionsMe && !mine(m) : comp.focus === "dms" ? dmIds.has(m.channel) : comp.focus === "threads" ? threadIds.has(m.threadTs ?? m.ts) : involves(m)));
-    const payload = { kind: "view", task, me: meta.me, view, ...(channel ? { channel: channelInfo(channel) } : {}), ...(ts ? { threadTs: ts } : {}), messages, conversations: conversationsFor(meta), composition: comp, via, timing: { slack: tSlack, jev: tJev } };
+    const payload = { kind: "view", task, me: meta.me, meProfile: meProfile(meta), view, ...(channel ? { channel: channelInfo(channel) } : {}), ...(ts ? { threadTs: ts } : {}), messages, conversations: conversationsFor(meta), composition: comp, via, timing: { slack: tSlack, jev: tJev } };
     const picked = `${view}, ${comp.focus}`;
     const label = view === "thread" ? "thread" : view === "channel" ? `#${channel!.name}` : `activity (${comp.focus.replace("_", " ")})`;
     if (!messages.length) return { summary: `No messages for ${label}; the card says so. Reply with nothing: no sentence about the card. End your turn now.`, payload, picked, offered: fu.actions, remember: comp };
@@ -107,10 +108,10 @@ export const slack = defineConnector({
     if (!c) throw new Error(`No Slack conversation matches "${ref}". Channels you can name: ${meta.channels.filter((x) => x.kind !== "dm").slice(0, 12).map((x) => `#${x.name}`).join(", ")}.`);
     if (ts) {
       const messages = await readThread(token, meta, c, ts, signal);
-      return { summary: `Card shown (thread in #${c.name}). Reply with nothing: no sentence about the card. End your turn now.`, payload: { kind: "view", view: "thread", me: meta.me, channel: channelInfo(c), threadTs: ts, messages, conversations: conversationsFor(meta), composition: { view: "thread", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: "replies", ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
+      return { summary: `Card shown (thread in #${c.name}). Reply with nothing: no sentence about the card. End your turn now.`, payload: { kind: "view", view: "thread", me: meta.me, meProfile: meProfile(meta), channel: channelInfo(c), threadTs: ts, messages, conversations: conversationsFor(meta), composition: { view: "thread", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: "replies", ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
     }
     const r = await readChannel(token, meta, c, 14, signal);
-    return { summary: `Card shown (#${c.name}). Reply with nothing: no sentence about the card. End your turn now.`, picked: "channel", payload: { kind: "view", view: "channel", me: meta.me, channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
+    return { summary: `Card shown (#${c.name}). Reply with nothing: no sentence about the card. End your turn now.`, picked: "channel", payload: { kind: "view", view: "channel", me: meta.me, meProfile: meProfile(meta), channel: channelInfo(c), messages: r.messages, conversations: conversationsFor(meta), composition: { view: "channel", focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via: r.via, ...(params.draft ? { draft: params.draft } : {}), timing: { slack: ms(startedAt) } } };
   },
 
   async draft({ token, params, signal, startedAt, jev, cache, history }: Run): Promise<CardResult> {
@@ -146,7 +147,7 @@ export const slack = defineConnector({
     let threadTs: string | undefined;
     if (post) { const r = await postMessage(token, target.id, post.text, undefined, signal); applied.push(`posted in ${target.kind === "dm" ? `DM with ${target.name}` : `#${target.name}`} (${r.ts})`); }
     if (reply) { await postMessage(token, target.id, reply.text, reply.ts, signal); applied.push(`replied in #${target.name}`); threadTs = reply.ts; }
-    if (reaction) { await react(token, target.id, reaction.ts, reaction.emoji, signal); applied.push(`reacted :${reaction.emoji}:`); threadTs = reaction.ts; }
+    if (reaction) { await react(token, target.id, reaction.ts, reaction.emoji, signal, Boolean(reaction.remove)); applied.push(`${reaction.remove ? "removed" : "reacted"} :${reaction.emoji}:`); threadTs = reaction.ts; }
     const tWrite = ms(startedAt);
     const used = [...(post ? ["compose"] : []), ...(reply ? ["reply"] : []), ...(reaction ? ["react"] : [])];
     // Redraw from Slack's truth: the thread when we touched one, else the channel (history budget permitting, search otherwise).
@@ -155,7 +156,7 @@ export const slack = defineConnector({
     else { const r = await readChannel(token, meta, target, 14, signal); messages = r.messages; via = r.via; view = "channel"; }
     return {
       summary: `Sent to Slack: ${applied.join("; ")}. The card shows the result; reply with nothing: no sentence about it. End your turn now.`, used,
-      payload: { kind: "view", view, me: meta.me, channel: channelInfo(target), ...(threadTs && !post ? { threadTs } : {}), messages, conversations: conversationsFor(meta), composition: { view, focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via, applied, timing: { slack: tWrite } },
+      payload: { kind: "view", view, me: meta.me, meProfile: meProfile(meta), channel: channelInfo(target), ...(threadTs && !post ? { threadTs } : {}), messages, conversations: conversationsFor(meta), composition: { view, focus: "all", fields: { reactions: true, threads: true }, by: "fallback" }, via, applied, timing: { slack: tWrite } },
     };
   },
 });

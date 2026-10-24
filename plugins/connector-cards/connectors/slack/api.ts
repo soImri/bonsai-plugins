@@ -197,7 +197,7 @@ export async function postMessage(token: string, channelId: string, text: string
   const r = await slack(token, "chat.postMessage", { channel: channelId, text, ...(threadTs ? { thread_ts: threadTs } : {}) }, signal);
   return { ts: r.ts };
 }
-export async function react(token: string, channelId: string, ts: string, name: string, signal?: AbortSignal): Promise<void> {
-  try { await slack(token, "reactions.add", { channel: channelId, timestamp: ts, name: name.replace(/:/g, "") }, signal); }
-  catch (err) { if (!(err instanceof SlackError && err.code === "already_reacted")) throw err; }
+export async function react(token: string, channelId: string, ts: string, name: string, signal?: AbortSignal, remove = false): Promise<void> {
+  try { await slack(token, remove ? "reactions.remove" : "reactions.add", { channel: channelId, timestamp: ts, name: name.replace(/:/g, "") }, signal); }
+  catch (err) { if (!(err instanceof SlackError && (err.code === "already_reacted" || err.code === "no_reaction"))) throw err; }
 }
