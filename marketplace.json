@@ -1,15 +1,25 @@
 {
   "schemaVersion": 1,
   "name": "imri-plugins",
-  "description": "Bonsai plugins and skills by Imri Sofer. Connector Cards: a connected app's own UI in the chat (Linear, Google Calendar, Slack), Jev picks the view at runtime.",
+  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, and Product Preview for recording real feature walkthroughs.",
   "categories": [
     {
       "id": "connectors",
       "label": "Connectors",
       "description": "Plugins and skills that put a connected app's own UI in the chat."
+    },
+    {
+      "id": "product-demos",
+      "label": "Product demos",
+      "description": "Recordings and walkthroughs that show a product in use."
     }
   ],
-  "skills": [],
+  "skills": [
+    {
+      "path": "product-preview",
+      "category": "product-demos"
+    }
+  ],
   "plugins": [
     {
       "path": "connector-cards",

@@ -1,16 +1,37 @@
 {
   "schemaVersion": 1,
   "name": "imri-plugins",
-  "description": "Bonsai plugins and skills by Imri Sofer. Connector Cards: a connected app's own UI in the chat (Linear, Google Calendar, Slack), Jev picks the view at runtime.",
-  "generatedAt": "2026-10-24T01:15:04.736Z",
+  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, and Product Preview for recording real feature walkthroughs.",
+  "generatedAt": "2026-11-06T15:27:50.832Z",
   "categories": [
     {
       "id": "connectors",
       "label": "Connectors",
       "description": "Plugins and skills that put a connected app's own UI in the chat."
+    },
+    {
+      "id": "product-demos",
+      "label": "Product demos",
+      "description": "Recordings and walkthroughs that show a product in use."
     }
   ],
-  "skills": [],
+  "skills": [
+    {
+      "path": "product-preview",
+      "name": "product-preview",
+      "description": "Record a short, captioned GIF of a real product flow, a matched before/after comparison, or a feature walkthrough. Includes a portable Chromium/CDP recorder, GIF encoder, review images, and optional presentation-page and cover templates. Use when asked to make a product preview, demo recording, or feature GIF. Not for implementing the feature, fabricated UI animations, static mockups, or posting the result.",
+      "category": "product-demos",
+      "version": "0.1.0",
+      "commit": "",
+      "creator": "",
+      "contributors": [],
+      "metadata": {
+        "version": "0.1.0",
+        "kay-model-tier": "medium"
+      },
+      "digest": "sha256:ef5d7bf689458c19643e8e4917b97d80916584161c4f5c5f2a7c5857721898fb"
+    }
+  ],
   "plugins": [
     {
       "path": "connector-cards",
@@ -25,7 +46,7 @@
         "app",
         "ui"
       ],
-      "commit": "8605ed2a2112793331c223fd8cce6a2f8c2dbdcb",
+      "commit": "78964151a619272b629bf8321f68f94afb09e3e6",
       "creator": "Imri Sofer",
       "contributors": [
         "Imri Sofer"

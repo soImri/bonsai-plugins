@@ -1,1 +1,4 @@
 connector-cards.zip
+node_modules/
+product-preview/**/scenario.mjs
+product-preview/**/take*/

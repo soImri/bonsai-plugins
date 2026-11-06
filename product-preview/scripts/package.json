@@ -1,0 +1,15 @@
+{
+  "name": "product-preview-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable CDP product-preview recorder and GIF encoder",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test smoke.test.cjs",
+    "test:browser": "node browser-smoke.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.65.0",
+    "sharp": "0.35.5"
+  }
+}

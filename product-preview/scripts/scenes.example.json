@@ -1,0 +1,13 @@
+{
+  "out": "preview.gif",
+  "captions": {
+    "1": "Give it a task",
+    "2": "See the result"
+  },
+  "segments": [
+    ["real", 1, "task_start", 0, "task_sent", 0, "window"],
+    ["wait", 1, "task_sent", 0, "result", 0, "window"],
+    ["real", 2, "result", 0, "end", 0, "window"]
+  ],
+  "poster": 2
+}
