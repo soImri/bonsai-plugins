@@ -2,7 +2,7 @@
 name: yakomoji
 description: Create or revise consistent Yako (Yucko) mascot emoji as transparent still PNGs or looping animated GIFs, using the bundled character reference and the team's established cartoon style.
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Yakomoji

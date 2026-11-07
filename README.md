@@ -5,7 +5,7 @@ A Bonsai marketplace: plugins and skills by Imri Sofer.
 | Item | Kind | What it is |
 | --- | --- | --- |
 | `product-preview` | skill | Record a short, captioned GIF of a real product flow or matched before/after comparison. Portable CDP recorder, GIF encoder, review images, optional presentation page and cover; no machine-specific paths or Kay checkout required. |
-| `yakomoji` | skill | Create or revise transparent Yako mascot PNGs and looping GIFs. Includes the character reference, 20 concept examples, prompt patterns and a macOS GIF assembler. |
+| <img src="yakomoji/assets/icon-256.png" width="40" alt="Yakomoji"> `yakomoji` | skill | Create or revise transparent Yako mascot PNGs and looping GIFs. Includes the character reference, 20 concept examples, prompt patterns and a macOS GIF assembler. |
 | `plugins/connector-cards` | plugin | Connector Cards: a connected app's own UI in Bonsai's chat. Linear (issue, list, board, project, create), Google Calendar (agenda, month, event, find a time, create) and Slack (channel, thread, activity, composer). One tool call per ask; the plugin reads and writes the app through Bonsai's sign-in, Jev picks the view and fields at runtime, and you navigate inside the card. |
 
 ## Add it to Bonsai
