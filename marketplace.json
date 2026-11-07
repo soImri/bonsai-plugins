@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "imri-plugins",
-  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, and Product Preview for recording real feature walkthroughs.",
+  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, Product Preview for real feature walkthroughs, and Yako Emoji for mascot stills and animations.",
   "categories": [
     {
       "id": "connectors",
@@ -12,12 +12,21 @@
       "id": "product-demos",
       "label": "Product demos",
       "description": "Recordings and walkthroughs that show a product in use."
+    },
+    {
+      "id": "design-assets",
+      "label": "Design assets",
+      "description": "Create and revise visual assets, mascot illustrations and emoji."
     }
   ],
   "skills": [
     {
       "path": "product-preview",
       "category": "product-demos"
+    },
+    {
+      "path": "yako-emoji",
+      "category": "design-assets"
     }
   ],
   "plugins": [
