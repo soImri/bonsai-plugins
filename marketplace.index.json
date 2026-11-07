@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "name": "imri-plugins",
-  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, Product Preview for real feature walkthroughs, and Yako Emoji for mascot stills and animations.",
-  "generatedAt": "2026-11-07T00:20:31.432Z",
+  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, Product Preview for real feature walkthroughs, and Yakomoji for mascot stills and animations.",
+  "generatedAt": "2026-11-07T02:09:22.699Z",
   "categories": [
     {
       "id": "connectors",
@@ -39,18 +39,18 @@
       "digest": "sha256:ef5d7bf689458c19643e8e4917b97d80916584161c4f5c5f2a7c5857721898fb"
     },
     {
-      "path": "yako-emoji",
-      "name": "yako-emoji",
+      "path": "yakomoji",
+      "name": "yakomoji",
       "description": "Create or revise consistent Yako (Yucko) mascot emoji as transparent still PNGs or looping animated GIFs, using the bundled character reference and the team's established cartoon style.",
       "category": "design-assets",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "commit": "",
       "creator": "",
       "contributors": [],
       "metadata": {
-        "version": "0.1.0"
+        "version": "0.2.0"
       },
-      "digest": "sha256:0644209d04c7b5f78d089844e7a231b2873707f5da4dbc46f1de64ac0805320a"
+      "digest": "sha256:8129f8617a112f303f083fb20a753036fc3ba9aa61b37a6638bc058645a03ddb"
     }
   ],
   "plugins": [

@@ -1,6 +1,0 @@
-interface:
-  display_name: "Yako Emoji"
-  short_description: "Create consistent Yako still and animated emoji"
-  default_prompt: "Use $yako-emoji to create a transparent Yako emoji for my idea, matching the bundled mascot reference."
-policy:
-  allow_implicit_invocation: true

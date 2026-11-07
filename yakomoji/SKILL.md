@@ -1,11 +1,11 @@
 ---
-name: yako-emoji
+name: yakomoji
 description: Create or revise consistent Yako (Yucko) mascot emoji as transparent still PNGs or looping animated GIFs, using the bundled character reference and the team's established cartoon style.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
-# Yako emoji
+# Yakomoji
 
 Create a recognizable, cute Yako whose expression and action read at chat-emoji size. Use the user's requested name and concept. Default to a still unless animation is requested. User direction overrides these defaults.
 
