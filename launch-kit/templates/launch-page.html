@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>FEATURE</title>
+<style>
+:root{--ink:#202c27;--paper:#eff3e9;--line:#b6bfb5}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer;min-height:44px;color:inherit}button:disabled{cursor:default;opacity:.55}main{width:min(1440px,100%);margin:auto;padding:44px clamp(20px,4.5vw,72px) 52px}h1{font-size:clamp(36px,4.5vw,64px);line-height:1.08;font-weight:450;letter-spacing:-.05em;margin:0 0 18px;overflow-wrap:anywhere}.lead{max-width:48em;line-height:1.5;font-size:clamp(16px,1.4vw,19px);margin:0 0 28px}h2{font-weight:500;font-size:28px;letter-spacing:-.03em;margin:0 0 20px;overflow-wrap:anywhere}.tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-bottom:30px}.tab{white-space:nowrap;border:0;border-bottom:2px solid transparent;background:transparent;padding:12px 16px}.tab[aria-selected=true]{border-color:var(--ink)}[hidden]{display:none!important}:focus-visible{outline:3px solid currentColor;outline-offset:4px}.unit+.unit{margin-top:36px}.gallery{background:var(--ink);color:var(--paper);border-radius:20px;padding:clamp(16px,3vw,42px);max-width:100%;min-width:0}.player{width:min(100%,880px);margin:auto;aspect-ratio:8/7;background:#17201b;border:1px solid #7b897f;border-radius:10px;overflow:hidden;display:grid;place-items:center}.player img{display:block;width:100%;height:100%;object-fit:contain;min-height:0}.toolbar{width:min(100%,880px);display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:18px auto}.task{font-size:20px;font-weight:550;margin:0;flex:1;overflow-wrap:anywhere}.controls{display:flex;gap:8px;flex-wrap:wrap}.controls button{border:1px solid #87968b;border-radius:24px;background:transparent;padding:8px 14px}.arrows{display:flex;gap:8px;justify-content:flex-end;max-width:880px;margin:0 auto 12px}.arrows button{width:44px;height:44px;border:1px solid #87968b;border-radius:50%;background:transparent;font-size:22px}.thumbnails{display:flex;gap:12px;overflow-x:auto;padding:6px 4px 14px;margin:0 auto;max-width:888px;scroll-snap-type:x proximity}.thumbnail{flex:0 0 164px;min-width:0;padding:0;border:1px solid #7b897f;border-radius:9px;background:#17201b;color:var(--paper);overflow:hidden;text-align:left;scroll-snap-align:start}.thumbnail[aria-pressed=true]{border-color:var(--paper);box-shadow:0 0 0 1px var(--paper)}.thumbnail img{width:100%;height:auto;aspect-ratio:8/7;object-fit:contain;display:block}.thumbnail span{display:block;padding:10px;font-size:13px;line-height:1.35;overflow-wrap:anywhere}.pending{padding:50px 0;font-size:24px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}@media(max-width:600px){main{padding:28px 20px 32px}.gallery{border-radius:16px}.thumbnail{flex-basis:132px}.toolbar{align-items:flex-start;flex-direction:column}.task{font-size:18px}.controls button{padding:8px 12px}}
+</style>
+</head>
+<body>
+<main><nav class="tabs" role="tablist" aria-label="Feature" hidden></nav><div id="sections"></div><p class="sr-only" id="playback-status" role="status" aria-live="polite"></p></main>
+<!-- Replace this data only. Paths are relative to this page. For one unit, remove
+     the other unit and set the concept's previews to []; no tabs will render. -->
+<script type="application/json" id="kit-data">
+{
+  "schemaVersion": 1,
+  "feature": "FEATURE",
+  "lead": "BENEFIT_LEAD",
+  "sections": [
+    {"id":"concept","label":"FEATURE","previews":[
+      {"label":"Complete a task","src":"assets/concept.gif","poster":"assets/concept.png","thumbnail":"assets/concept-thumb.png"}
+    ]},
+    {"id":"workspace","label":"Workspace","previews":[
+      {"label":"Plan your day","src":"assets/plan.gif","poster":"assets/plan.png","thumbnail":"assets/plan-thumb.png"},
+      {"label":"Set a priority","src":"assets/priority.gif","poster":"assets/priority.png","thumbnail":"assets/priority-thumb.png"}
+    ]},
+    {"id":"planning","label":"Planning","previews":[
+      {"label":"Compare options","src":"assets/compare.gif","poster":"assets/compare.png","thumbnail":"assets/compare-thumb.png"}
+    ]}
+  ]
+}
+</script>
+<script>
+(()=>{'use strict';
+const kit=JSON.parse(document.querySelector('#kit-data').textContent);
+document.title=kit.feature;
+const tabbed=kit.sections.length>2,tabs=document.querySelector('.tabs'),host=document.querySelector('#sections'),status=document.querySelector('#playback-status');
+tabs.hidden=!tabbed;tabs.setAttribute('aria-label',kit.feature);
+const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+const elements=[],tabButtons=[],selected=new Map();let active=0,playing=!reduced.matches,objectURL=null,replayCount=0;
+const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;};
+function button(label,cls,action){const node=el('button',cls,label);node.type='button';node.addEventListener('click',action);return node;}
+function clearPlayer(){host.querySelectorAll('.player img').forEach(image=>{image.removeAttribute('src');image.remove();});if(objectURL){URL.revokeObjectURL(objectURL);objectURL=null;}}
+function playbackSource(src,restart){if(!restart)return src;if(src.startsWith('data:')){const comma=src.indexOf(','),raw=atob(src.slice(comma+1)),bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));objectURL=URL.createObjectURL(new Blob([bytes],{type:'image/gif'}));return objectURL;}const url=new URL(src,document.baseURI);url.searchParams.set('replay',String(++replayCount));return url.href;}
+function render(restart=false){
+ clearPlayer();
+ elements.forEach((ui,i)=>{
+  const current=tabbed?i===active:!!ui.gallery;
+  ui.section.hidden=tabbed&&i!==active;
+  if(tabbed){tabButtons[i].setAttribute('aria-selected',String(i===active));tabButtons[i].tabIndex=i===active?0:-1;}
+  if(!ui.gallery)return;
+  const index=selected.get(i)||0,clip=kit.sections[i].previews[index];
+  ui.title.textContent=clip.label;
+  ui.thumbs.forEach((thumb,n)=>thumb.setAttribute('aria-pressed',String(n===index)));
+  ui.play.textContent=playing?'Pause':'Play';ui.play.setAttribute('aria-pressed',String(playing));
+  if(!current)return;
+  const image=el('img');image.alt=clip.label;image.dataset.activePreview='';image.dataset.playing=String(playing);image.dataset.section=String(i);image.dataset.index=String(index);image.src=playing?playbackSource(clip.src,restart):clip.poster;ui.player.append(image);
+ });
+}
+function choose(section,index,focus=false){const ui=elements[section],count=ui.thumbs.length;selected.set(section,(index+count)%count);playing=!reduced.matches;render();const thumb=ui.thumbs[selected.get(section)];if(focus)thumb.focus({preventScroll:true});thumb.scrollIntoView({block:'nearest',inline:'nearest'});}
+function select(index,focus=false,updateHash=true){active=index;playing=!reduced.matches;render();if(tabbed){const tab=tabButtons[index];if(focus)tab.focus({preventScroll:true});tab.scrollIntoView({block:'nearest',inline:'nearest'});if(updateHash)history.replaceState(null,'','#'+kit.sections[index].id);}}
+kit.sections.forEach((unit,i)=>{
+ const section=el('section','unit');section.dataset.section=unit.id;section.id='section-'+unit.id;
+ const heading=el(i===0?'h1':'h2','',i===0?kit.feature:unit.label);heading.id='heading-'+unit.id;section.setAttribute('aria-labelledby',heading.id);section.append(heading);
+ if(i===0)section.append(el('p','lead',kit.lead));
+ const ui={section};elements.push(ui);host.append(section);
+ if(tabbed){const tab=button(unit.label,'tab',()=>select(i));tab.setAttribute('role','tab');tab.dataset.tab=unit.id;tab.id='tab-'+unit.id;tab.setAttribute('aria-controls',section.id);section.setAttribute('role','tabpanel');section.setAttribute('aria-labelledby',tab.id);tabButtons.push(tab);tabs.append(tab);tab.addEventListener('keydown',event=>{let next;if(event.key==='ArrowRight')next=(i+1)%kit.sections.length;if(event.key==='ArrowLeft')next=(i-1+kit.sections.length)%kit.sections.length;if(event.key==='Home')next=0;if(event.key==='End')next=kit.sections.length-1;if(next!==undefined){event.preventDefault();select(next,true);}});}
+ if(unit.pending){section.append(el('p','pending','Coming soon'));return;}
+ if(!unit.previews.length)return;
+ const gallery=el('div','gallery');gallery.setAttribute('role','region');gallery.setAttribute('aria-label',unit.label+' previews');gallery.tabIndex=0;
+ const player=el('div','player'),toolbar=el('div','toolbar'),title=el('h3','task'),controls=el('div','controls');
+ const replay=button('Replay','replay',()=>{playing=true;render(true);status.textContent='Preview restarted.';});
+ const play=button('','play',()=>{playing=!playing;render();});
+ controls.append(replay,play);toolbar.append(title,controls);
+ const arrows=el('div','arrows'),previous=button('←','previous',()=>choose(i,(selected.get(i)||0)-1)),next=button('→','next',()=>choose(i,(selected.get(i)||0)+1));previous.setAttribute('aria-label','Previous preview');next.setAttribute('aria-label','Next preview');previous.disabled=next.disabled=unit.previews.length<2;arrows.append(previous,next);
+ const rail=el('div','thumbnails');rail.setAttribute('role','group');rail.setAttribute('aria-label','Choose a preview');
+ const thumbs=unit.previews.map((clip,n)=>{const thumb=button(undefined,'thumbnail',()=>choose(i,n));thumb.setAttribute('aria-label',clip.label);const image=el('img');image.src=clip.thumbnail;image.alt='';image.width=320;image.height=280;thumb.append(image,el('span','',clip.label));rail.append(thumb);return thumb;});
+ gallery.append(player,toolbar,arrows,rail);section.append(gallery);Object.assign(ui,{gallery,player,title,thumbs,play});
+ gallery.addEventListener('keydown',event=>{let index=selected.get(i)||0;if(event.key==='ArrowRight')index++;else if(event.key==='ArrowLeft')index--;else if(event.key==='Home')index=0;else if(event.key==='End')index=unit.previews.length-1;else return;event.preventDefault();choose(i,index,true);});
+});
+function fromHash(){const index=kit.sections.findIndex(s=>s.id===location.hash.slice(1));select(index<0?0:index,false,false);}
+window.addEventListener('hashchange',fromHash);
+reduced.addEventListener('change',()=>{if(reduced.matches){playing=false;render();}});
+window.addEventListener('pagehide',clearPlayer);
+fromHash();
+})();
+</script>
+</body>
+</html>

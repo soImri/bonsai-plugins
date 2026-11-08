@@ -6,16 +6,17 @@ A Bonsai marketplace: skills by Imri Sofer.
   <tr><th></th><th align="left">Skill</th><th align="left">What it does</th></tr>
   <tr><td width="48" align="center"></td><td nowrap><b>ship-app-cards</b></td><td>Take a connected app from no App Cards to shipped: agree the cards, build them in the app's bundled Bonsai plugin, run up to three eval + UX-expert rounds until they feel like the real app, record previews for the launch kit, then merge and announce. Includes the helper briefs, the review-loop method and the known traps.</td></tr>
   <tr><td width="48" align="center"></td><td nowrap><b>product-preview</b></td><td>Record a short, captioned GIF of a real product flow or matched before/after comparison. Portable CDP recorder, GIF encoder, review images, optional presentation page and cover; no machine-specific paths or Kay checkout required.</td></tr>
+  <tr><td width="48" align="center"></td><td nowrap><b>launch-kit</b></td><td>Build a launch kit for your feature: one self-contained HTML page with a gallery of short previews per app, surface or use case, plus a cover for the announcement. Includes the page template, the copy rules, packaging and page checks, and a frame-by-frame privacy audit. Records with <code>product-preview</code>.</td></tr>
   <tr><td width="48" align="center"><img src="yakomoji/assets/icon-256.png" width="48" height="48" alt=""></td><td nowrap><b>yakomoji</b></td><td>Create or revise transparent Yako mascot PNGs and looping GIFs. Includes the character reference, 20 concept examples, prompt patterns and a macOS GIF assembler.</td></tr>
 </table>
 
 ## Add it to Bonsai
 
-App Store → Sources → add `https://github.com/soImri/bonsai-plugins` as a marketplace and review the source. Then open App Store → Browse and press Get on the specific item you want. Choose `ship-app-cards` under Connectors, `product-preview` under Product demos or `yakomoji` under Design assets.
+App Store → Sources → add `https://github.com/soImri/bonsai-plugins` as a marketplace and review the source. Then open App Store → Browse and press Get on the specific item you want. Choose `ship-app-cards` under Connectors, `product-preview` or `launch-kit` under Product demos, or `yakomoji` under Design assets.
 
 If this source is already added, open App Store → Sources → the source → Check for updates, then find the skill you want in Browse.
 
-Or ask Bonsai: "Install the yakomoji skill from https://github.com/soImri/bonsai-plugins". For the preview workflow, substitute `product-preview`.
+Or ask Bonsai: "Install the launch-kit skill from https://github.com/soImri/bonsai-plugins". Substitute any other skill name from the table.
 
 Trusting a source makes its catalog browsable; it does not install every item.
 
@@ -26,6 +27,10 @@ Run it on Claude Opus 5.5 at the extra high (`xhigh`) thinking level, or Claude 
 ### Product Preview prerequisites
 
 A sandbox/development Chromium or Electron page with CDP enabled, Node.js 22+, and npm access. The skill discovers the target's actual endpoint and asks the agent to adapt the scenario to the observed UI. It does not automate sign-in or capture native operating-system dialogs. Its optional page and cover templates need no private brand assets or licensed fonts.
+
+### Launch Kit prerequisites
+
+Install `product-preview` too; it records the previews. Node.js 22+ and a Chromium for the page checks. Text in frames is read automatically on macOS, or with Tesseract elsewhere; without either, the privacy check is a visual pass only.
 
 ### Yakomoji prerequisites
 
