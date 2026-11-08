@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "name": "imri-plugins",
-  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, Product Preview for real feature walkthroughs, and Yakomoji for mascot stills and animations.",
-  "generatedAt": "2026-11-07T02:32:33.185Z",
+  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, Ship App Cards for building them into Bonsai, Product Preview for real feature walkthroughs, and Yakomoji for mascot stills and animations.",
+  "generatedAt": "2026-11-08T20:06:47.616Z",
   "categories": [
     {
       "id": "connectors",
@@ -39,12 +39,27 @@
       "digest": "sha256:ef5d7bf689458c19643e8e4917b97d80916584161c4f5c5f2a7c5857721898fb"
     },
     {
+      "path": "ship-app-cards",
+      "name": "ship-app-cards",
+      "description": "Take a connected app from no App Cards to shipped, end to end: learn the card rules, agree which of the app's screens become cards, build them in the app's bundled Bonsai plugin, run up to three eval + UX-expert rounds until each card feels like the real app, record previews and add the app to the launch kit, then merge and announce. Use when someone asks to set up, add or build App Cards (chat cards that look and work like the app) for a service such as Gmail, Todoist, Notion or GitHub, or to run the whole card process for an app. Needs a top model and the yaklabs-ai/kay repo. Not for fixing one card's bug, showing an app's records with cards that already exist, the card visual rules alone, or a launch page with no new cards.",
+      "category": "connectors",
+      "version": "0.1.0",
+      "commit": "",
+      "creator": "",
+      "contributors": [],
+      "metadata": {
+        "version": "0.1.0",
+        "kay-model-tier": "ultra"
+      },
+      "digest": "sha256:387a70c7bf25b738580f798bd3ffb096d6e1c5edd21eadcd4e15db5a283822f7"
+    },
+    {
       "path": "yakomoji",
       "name": "yakomoji",
       "description": "Create or revise consistent Yako (Yucko) mascot emoji as transparent still PNGs or looping animated GIFs, using the bundled character reference and the team's established cartoon style.",
       "category": "design-assets",
       "version": "0.2.1",
-      "commit": "3b50f017f2b8571b42354e0c83ca8f13c27c133d",
+      "commit": "c9c0be4d7a28565f12726a101c753a7e71cfa853",
       "creator": "Imri Sofer",
       "contributors": [
         "Imri Sofer"

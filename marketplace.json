@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "imri-plugins",
-  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, Product Preview for real feature walkthroughs, and Yakomoji for mascot stills and animations.",
+  "description": "Bonsai plugins and skills by Imri Sofer: Connector Cards for connected apps, Ship App Cards for building them into Bonsai, Product Preview for real feature walkthroughs, and Yakomoji for mascot stills and animations.",
   "categories": [
     {
       "id": "connectors",
@@ -20,6 +20,10 @@
     }
   ],
   "skills": [
+    {
+      "path": "ship-app-cards",
+      "category": "connectors"
+    },
     {
       "path": "product-preview",
       "category": "product-demos"
