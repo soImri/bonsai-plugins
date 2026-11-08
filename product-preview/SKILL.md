@@ -2,7 +2,7 @@
 name: product-preview
 description: "Record a short, captioned GIF of a real product flow, a matched before/after comparison, or a feature walkthrough. Includes a portable Chromium/CDP recorder, GIF encoder, review images, and optional presentation-page and cover templates. Use when asked to make a product preview, demo recording, or feature GIF. Not for implementing the feature, fabricated UI animations, static mockups, or posting the result."
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   kay-model-tier: medium
 ---
 

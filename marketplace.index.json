@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "imri-plugins",
   "description": "Bonsai skills by Imri Sofer: Ship App Cards for building App Cards into Bonsai, Product Preview for real feature walkthroughs, Launch Kit for feature launch pages, and Yakomoji for mascot stills and animations.",
-  "generatedAt": "2026-11-08T20:47:26.455Z",
+  "generatedAt": "2026-11-08T20:48:32.825Z",
   "categories": [
     {
       "id": "connectors",
@@ -27,22 +27,7 @@
       "description": "Build or extend a feature launch kit: one portable HTML launch page, short real-product previews, and an announcement cover. Use for 'build a launch kit for <my feature>', multi-preview feature pages, or adding a surface to an existing kit. Composes product-preview for recording. Not for a lone GIF, feature implementation, recurring release notes, or posting an announcement.",
       "category": "product-demos",
       "version": "0.1.0",
-      "commit": "",
-      "creator": "",
-      "contributors": [],
-      "metadata": {
-        "version": "0.1.0",
-        "kay-model-tier": "medium"
-      },
-      "digest": "sha256:42744beca4b21e9bbe92688963895e9d0ee4082873a187c73c7e3cb16c659127"
-    },
-    {
-      "path": "product-preview",
-      "name": "product-preview",
-      "description": "Record a short, captioned GIF of a real product flow, a matched before/after comparison, or a feature walkthrough. Includes a portable Chromium/CDP recorder, GIF encoder, review images, and optional presentation-page and cover templates. Use when asked to make a product preview, demo recording, or feature GIF. Not for implementing the feature, fabricated UI animations, static mockups, or posting the result.",
-      "category": "product-demos",
-      "version": "0.1.0",
-      "commit": "09b5271a6da8fa8cea0042418449e5440c4e474c",
+      "commit": "2184658cd9250e9d03b22b008213e89b196c58a6",
       "creator": "Imri Sofer",
       "contributors": [
         "Imri Sofer"
@@ -51,7 +36,24 @@
         "version": "0.1.0",
         "kay-model-tier": "medium"
       },
-      "digest": "sha256:ef5d7bf689458c19643e8e4917b97d80916584161c4f5c5f2a7c5857721898fb"
+      "digest": "sha256:e45c39ed0f732f4ec9d83854022a91d49657d1375020c878dea218f906ad47c8"
+    },
+    {
+      "path": "product-preview",
+      "name": "product-preview",
+      "description": "Record a short, captioned GIF of a real product flow, a matched before/after comparison, or a feature walkthrough. Includes a portable Chromium/CDP recorder, GIF encoder, review images, and optional presentation-page and cover templates. Use when asked to make a product preview, demo recording, or feature GIF. Not for implementing the feature, fabricated UI animations, static mockups, or posting the result.",
+      "category": "product-demos",
+      "version": "0.1.1",
+      "commit": "09b5271a6da8fa8cea0042418449e5440c4e474c",
+      "creator": "Imri Sofer",
+      "contributors": [
+        "Imri Sofer"
+      ],
+      "metadata": {
+        "version": "0.1.1",
+        "kay-model-tier": "medium"
+      },
+      "digest": "sha256:b0ec5af72e9a425d2ef72f6a042f0533d283d95f92c103dad42d0b735948a035"
     },
     {
       "path": "ship-app-cards",
