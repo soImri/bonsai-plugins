@@ -2,7 +2,7 @@
 name: launch-kit
 description: "Build or extend a feature launch kit: one portable HTML launch page, short real-product previews, and an announcement cover. Use for 'build a launch kit for <my feature>', multi-preview feature pages, or adding a surface to an existing kit. Composes product-preview for recording. Not for a lone GIF, feature implementation, recurring release notes, or posting an announcement."
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   kay-model-tier: medium
 ---
 

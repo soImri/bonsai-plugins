@@ -2,7 +2,7 @@
 name: ship-app-cards
 description: "Take a connected app from no App Cards to shipped, end to end: learn the card rules, agree which of the app's screens become cards, build them in the app's bundled Bonsai plugin, run up to three eval + UX-expert rounds until each card feels like the real app, record previews and add the app to the launch kit, then merge and announce. Use when someone asks to set up, add or build App Cards (chat cards that look and work like the app) for a service such as Gmail, Todoist, Notion or GitHub, or to run the whole card process for an app. Needs a top model and the yaklabs-ai/kay repo. Not for fixing one card's bug, showing an app's records with cards that already exist, the card visual rules alone, or a launch page with no new cards."
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   kay-model-tier: ultra
 ---
 
