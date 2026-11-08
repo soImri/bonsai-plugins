@@ -7,17 +7,16 @@ A Bonsai marketplace: plugins and skills by Imri Sofer.
 | `ship-app-cards` | skill | Take a connected app from no App Cards to shipped: agree the cards, build them in the app's bundled Bonsai plugin, run up to three eval + UX-expert rounds until they feel like the real app, record previews for the launch kit, then merge and announce. Includes the helper briefs, the review-loop method and the known traps. |
 | `product-preview` | skill | Record a short, captioned GIF of a real product flow or matched before/after comparison. Portable CDP recorder, GIF encoder, review images, optional presentation page and cover; no machine-specific paths or Kay checkout required. |
 | <img src="yakomoji/assets/icon-256.png" width="40" alt="Yakomoji"> `yakomoji` | skill | Create or revise transparent Yako mascot PNGs and looping GIFs. Includes the character reference, 20 concept examples, prompt patterns and a macOS GIF assembler. |
-| `plugins/connector-cards` | plugin | Connector Cards: a connected app's own UI in Bonsai's chat. Linear (issue, list, board, project, create), Google Calendar (agenda, month, event, find a time, create) and Slack (channel, thread, activity, composer). One tool call per ask; the plugin reads and writes the app through Bonsai's sign-in, Jev picks the view and fields at runtime, and you navigate inside the card. |
 
 ## Add it to Bonsai
 
-App Store → Sources → add `https://github.com/soImri/bonsai-plugins` as a marketplace and review the source. Then open App Store → Browse and press Get on the specific item you want. Choose `ship-app-cards` under Connectors, `product-preview` under Product demos or `yakomoji` under Design assets. Connector Cards is a separate install.
+App Store → Sources → add `https://github.com/soImri/bonsai-plugins` as a marketplace and review the source. Then open App Store → Browse and press Get on the specific item you want. Choose `ship-app-cards` under Connectors, `product-preview` under Product demos or `yakomoji` under Design assets.
 
 If this source is already added, open App Store → Sources → the source → Check for updates, then find the skill you want in Browse.
 
 Or ask Bonsai: "Install the yakomoji skill from https://github.com/soImri/bonsai-plugins". For the preview workflow, substitute `product-preview`.
 
-Trusting a source makes its catalog browsable; it does not install every item. This repository also carries a plugin. Installed plugin code runs inside Bonsai with Bonsai's own authority; the preview skill itself is instructions and scripts, not a running plugin.
+Trusting a source makes its catalog browsable; it does not install every item.
 
 ### Ship App Cards prerequisites
 
